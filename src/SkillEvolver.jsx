@@ -1082,27 +1082,217 @@ const DEFAULT_EVAL_CONFIG = {
     "Create a landing page for a small-batch ceramics studio that sells online",
     "Design a settings panel for a desktop music production app",
   ],
-  criteria: [
-    "Visual distinctiveness and memorability",
-    "Typography choices (avoids generic fonts, good pairing)",
-    "Code quality and production-readiness",
-    "Avoidance of generic AI aesthetic patterns",
-    "Layout creativity and spatial composition",
-  ],
 };
 
-function EvalPanel({ apiKey, skillId, currentSkill, proposedSkill, onSkipToPreview }) {
+// Extract renderable HTML from Claude output.
+// Claude often wraps HTML in markdown fences with a preamble explanation.
+function extractHtml(text) {
+  if (!text || typeof text !== "string") return { html: null, raw: text, isJsx: false };
+
+  // Check for React/JSX indicators (even inside fences)
+  const isJsx = /\b(import\s+React|export\s+default\s+function|useState|useEffect|React\.createElement)\b/.test(text);
+
+  // Strategy 1: Find the LAST ```html ... ``` fence (greedy match gets the biggest block)
+  // Use a greedy approach: find all fenced blocks and take the one containing HTML
+  const allFences = [...text.matchAll(/```(?:html)?\s*\n([\s\S]*?)```/g)];
+  for (const fence of allFences) {
+    const inner = fence[1].trim();
+    if (/<!DOCTYPE\s+html|<html[\s>]/i.test(inner)) {
+      // Verify we got the closing </html> tag — if not, the fence was cut short
+      if (/<\/html>/i.test(inner)) {
+        return { html: inner, raw: text, isJsx: false };
+      }
+    }
+  }
+
+  // Strategy 2: Extract everything from <!DOCTYPE html> to </html>, ignoring fences
+  const fullDocMatch = text.match(/(<!DOCTYPE\s+html[\s\S]*?<\/html>)/i);
+  if (fullDocMatch) {
+    // Strip any leading ``` or trailing ``` that might have been captured
+    const cleaned = fullDocMatch[1].replace(/^```(?:html)?\s*\n?/, "").replace(/\n?```\s*$/, "").trim();
+    return { html: cleaned, raw: text, isJsx: false };
+  }
+
+  // Strategy 3: <html> to </html> without DOCTYPE
+  const htmlTagMatch = text.match(/(<html[\s\S]*?<\/html>)/i);
+  if (htmlTagMatch) {
+    return { html: htmlTagMatch[1].trim(), raw: text, isJsx: false };
+  }
+
+  // Strategy 4: Direct HTML (starts with it, no fence)
+  const trimmed = text.trim();
+  if (/^<!DOCTYPE\s+html/i.test(trimmed) || /^<html[\s>]/i.test(trimmed)) {
+    return { html: trimmed, raw: text, isJsx: false };
+  }
+
+  if (isJsx) return { html: null, raw: text, isJsx: true };
+  return { html: null, raw: text, isJsx: false };
+}
+
+function EvalOutputViewer({ outputA, outputB, aIsX, revealed }) {
+  const [viewMode, setViewMode] = useState("preview"); // "preview" | "code"
+  const [iframeHeight, setIframeHeight] = useState(700);
+  const [activeOutput, setActiveOutput] = useState("X"); // show one at a time
+
+  const rawX = aIsX ? outputA : outputB;
+  const rawY = aIsX ? outputB : outputA;
+
+  const parsedX = useMemo(() => extractHtml(rawX), [rawX]);
+  const parsedY = useMemo(() => extractHtml(rawY), [rawY]);
+  const activeParsed = activeOutput === "X" ? parsedX : parsedY;
+  const canPreview = activeParsed.html != null;
+
+  const effectiveMode = canPreview ? viewMode : "code";
+  const heightOptions = [500, 700, 900];
+
+  const renderOutput = (parsed, label) => {
+    if (effectiveMode === "preview") {
+      if (parsed.html) {
+        return (
+          <iframe
+            srcDoc={parsed.html}
+            sandbox="allow-scripts allow-same-origin"
+            style={{
+              width: "100%",
+              height: iframeHeight,
+              border: "1px solid #333",
+              borderRadius: 8,
+              background: "#fff",
+            }}
+            title={`${label} preview`}
+          />
+        );
+      }
+      // Preview requested but no HTML found — show fallback
+      return (
+        <div style={{
+          padding: 20, background: "#1a1a1a", borderRadius: 8,
+          border: "1px dashed #444", textAlign: "center",
+          height: iframeHeight, display: "flex", flexDirection: "column",
+          justifyContent: "center", alignItems: "center", gap: 8,
+        }}>
+          <span style={{ color: "#888", fontSize: 13 }}>
+            {parsed.isJsx ? "React component detected — switch to Code view" : "Could not extract HTML from this output — switch to Code view"}
+          </span>
+          <button
+            onClick={() => setViewMode("code")}
+            style={{
+              padding: "6px 16px", borderRadius: 6, border: "1px solid #444",
+              background: "transparent", color: "#4f8fff", cursor: "pointer", fontSize: 12,
+            }}
+          >
+            View Code
+          </button>
+        </div>
+      );
+    }
+    return (
+      <pre style={{
+        padding: 12, background: "#111", borderRadius: 6, fontSize: 11,
+        color: "#ccc", whiteSpace: "pre-wrap", maxHeight: iframeHeight,
+        overflow: "auto", lineHeight: 1.5, fontFamily: "monospace",
+      }}>
+        {parsed.raw}
+      </pre>
+    );
+  };
+
+  const revealedLabel = (output) => {
+    if (!revealed) return `Output ${output}`;
+    if (output === "X") return aIsX ? "Current (A)" : "Proposed (B)";
+    return aIsX ? "Proposed (B)" : "Current (A)";
+  };
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      {/* Controls row */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
+        {/* Output tabs — switch between X and Y */}
+        <div style={{ display: "flex", gap: 4 }}>
+          {["X", "Y"].map((o) => (
+            <button
+              key={o}
+              onClick={() => setActiveOutput(o)}
+              style={{
+                padding: "5px 16px", borderRadius: 6, fontSize: 13, cursor: "pointer", fontWeight: 600,
+                border: activeOutput === o ? "2px solid #4f8fff" : "1px solid #333",
+                background: activeOutput === o ? "#1a2a4a" : "transparent",
+                color: activeOutput === o ? "#4f8fff" : "#666",
+              }}
+            >
+              {revealedLabel(o)}
+            </button>
+          ))}
+        </div>
+
+        <div style={{ display: "flex", gap: 4 }}>
+          {canPreview && (
+            <>
+              <button
+                onClick={() => setViewMode("preview")}
+                style={{
+                  padding: "3px 10px", borderRadius: 4, fontSize: 11, cursor: "pointer",
+                  border: viewMode === "preview" ? "1px solid #4f8fff" : "1px solid #333",
+                  background: viewMode === "preview" ? "#1a2a4a" : "transparent",
+                  color: viewMode === "preview" ? "#4f8fff" : "#666",
+                }}
+              >
+                Preview
+              </button>
+              <button
+                onClick={() => setViewMode("code")}
+                style={{
+                  padding: "3px 10px", borderRadius: 4, fontSize: 11, cursor: "pointer",
+                  border: viewMode === "code" ? "1px solid #4f8fff" : "1px solid #333",
+                  background: viewMode === "code" ? "#1a2a4a" : "transparent",
+                  color: viewMode === "code" ? "#4f8fff" : "#666",
+                }}
+              >
+                Code
+              </button>
+            </>
+          )}
+          {heightOptions.map((h) => (
+            <button
+              key={h}
+              onClick={() => setIframeHeight(h)}
+              style={{
+                padding: "3px 6px", borderRadius: 3, fontSize: 10, cursor: "pointer",
+                border: iframeHeight === h ? "1px solid #555" : "1px solid #2a2a2a",
+                background: iframeHeight === h ? "#222" : "transparent",
+                color: iframeHeight === h ? "#aaa" : "#555",
+              }}
+            >
+              {h}px
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Full-width output */}
+      {renderOutput(activeParsed, `Output ${activeOutput}`)}
+    </div>
+  );
+}
+
+function EvalPanel({ apiKey, skillId, currentSkill, proposedSkill, onSkipToPreview, onAddFeedback }) {
   const storageKeyConfig = `skill-evolver:${skillId}:eval-config`;
   const storageKeyResults = `skill-evolver:${skillId}:eval-results`;
 
   const [config, setConfig] = useState(null);
-  const [results, setResults] = useState(null);
-  const [status, setStatus] = useState("idle"); // idle | running | done | error
+  const [results, setResults] = useState(null); // { ts, labelA, labelB, promptResults: [...] }
+  const [status, setStatus] = useState("idle"); // idle | running | reviewing | done | error
   const [progress, setProgress] = useState("");
   const [error, setError] = useState(null);
-  const [expandedPrompts, setExpandedPrompts] = useState({});
   const [editingConfig, setEditingConfig] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [revealed, setRevealed] = useState(false);
+
+  // Current prompt index being reviewed
+  const [currentPromptIdx, setCurrentPromptIdx] = useState(0);
+  // Judgment for current prompt
+  const [currentWinner, setCurrentWinner] = useState(null); // "X"|"Y"|"tie"
+  const [currentFeedback, setCurrentFeedback] = useState("");
 
   // Load config and results from storage
   useEffect(() => {
@@ -1110,13 +1300,11 @@ function EvalPanel({ apiKey, skillId, currentSkill, proposedSkill, onSkipToPrevi
       let savedConfig = await storageGet(storageKeyConfig);
       if (!savedConfig) {
         savedConfig = { ...DEFAULT_EVAL_CONFIG };
-        // If we have a proposed skill, use it as B
         if (proposedSkill) {
           savedConfig.skillB = proposedSkill;
           savedConfig.labelB = "Proposed";
         }
       }
-      // Always update skillA to current if provided
       if (currentSkill) {
         savedConfig.skillA = currentSkill;
         savedConfig.labelA = "Current";
@@ -1131,7 +1319,17 @@ function EvalPanel({ apiKey, skillId, currentSkill, proposedSkill, onSkipToPrevi
       const savedResults = await storageGet(storageKeyResults);
       if (savedResults) {
         setResults(savedResults);
-        setStatus("done");
+        const allJudged = savedResults.promptResults.every((r) => r.winner);
+        if (allJudged) {
+          setStatus("done");
+        } else {
+          // Find the first unjudged prompt
+          const nextIdx = savedResults.promptResults.findIndex((r) => !r.winner);
+          if (nextIdx >= 0) {
+            setCurrentPromptIdx(nextIdx);
+            setStatus("reviewing");
+          }
+        }
       }
       setLoading(false);
     })();
@@ -1142,125 +1340,58 @@ function EvalPanel({ apiKey, skillId, currentSkill, proposedSkill, onSkipToPrevi
     await storageSet(storageKeyConfig, updated);
   };
 
-  const runEval = useCallback(async () => {
+  // Generate outputs for ONE prompt at a time
+  const generateForPrompt = useCallback(async (promptIdx) => {
     if (!config) return;
+    const testPrompt = config.testPrompts[promptIdx];
+    if (!testPrompt) return;
+
     setStatus("running");
     setError(null);
-    setResults(null);
-
-    const promptResults = [];
+    setProgress("Generating output from skill A...");
+    setCurrentWinner(null);
+    setCurrentFeedback("");
+    setRevealed(false);
 
     try {
-      for (let i = 0; i < config.testPrompts.length; i++) {
-        const testPrompt = config.testPrompts[i];
-        setProgress(`Running prompt ${i + 1}/${config.testPrompts.length}: generating output A...`);
+      const outputA = await callClaude(
+        [{ role: "user", content: testPrompt }],
+        false,
+        apiKey,
+        config.skillA
+      );
 
-        // Generate output A
-        const outputA = await callClaude(
-          [{ role: "user", content: testPrompt }],
-          false,
-          apiKey,
-          config.skillA
-        );
+      setProgress("Generating output from skill B...");
 
-        setProgress(`Running prompt ${i + 1}/${config.testPrompts.length}: generating output B...`);
+      const outputB = await callClaude(
+        [{ role: "user", content: testPrompt }],
+        false,
+        apiKey,
+        config.skillB
+      );
 
-        // Generate output B
-        const outputB = await callClaude(
-          [{ role: "user", content: testPrompt }],
-          false,
-          apiKey,
-          config.skillB
-        );
+      const aIsX = Math.random() < 0.5;
 
-        // Randomly assign to X/Y
-        const aIsX = Math.random() < 0.5;
-        const outputX = aIsX ? outputA : outputB;
-        const outputY = aIsX ? outputB : outputA;
-
-        setProgress(`Running prompt ${i + 1}/${config.testPrompts.length}: judging outputs...`);
-
-        // Judge
-        const judgePrompt = `You are evaluating two frontend code outputs for the same design prompt. You do not know which system produced which output. Evaluate strictly on quality.
-
-Design prompt: "${testPrompt}"
-
-=== Output X ===
-${outputX}
-
-=== Output Y ===
-${outputY}
-
-Evaluate on these criteria: ${config.criteria.join(", ")}
-
-Respond with ONLY valid JSON, no markdown fences, no preamble:
-{
-  "preferred": "X" or "Y",
-  "rationale": "2-3 sentence explanation of why the preferred output is stronger",
-  "scores": {
-    ${config.criteria.map((c) => `"${c}": {"X": "<1-10>", "Y": "<1-10>"}`).join(",\n    ")}
-  }
-}`;
-
-        const judgeRaw = await callClaude(
-          [{ role: "user", content: judgePrompt }],
-          false,
-          apiKey
-        );
-
-        let judgeResult;
-        try {
-          // Strip markdown fences if present
-          const cleaned = judgeRaw.replace(/```(?:json)?\s*/g, "").replace(/```\s*/g, "").trim();
-          judgeResult = JSON.parse(cleaned);
-        } catch {
-          judgeResult = { parseError: true, raw: judgeRaw };
-        }
-
-        // Map back from X/Y to A/B
-        let winner = null;
-        if (judgeResult.preferred === "X") winner = aIsX ? "A" : "B";
-        else if (judgeResult.preferred === "Y") winner = aIsX ? "B" : "A";
-
-        // Convert scores from X/Y to A/B
-        let scoresAB = null;
-        if (judgeResult.scores && !judgeResult.parseError) {
-          scoresAB = {};
-          for (const criterion of config.criteria) {
-            const s = judgeResult.scores[criterion];
-            if (s) {
-              scoresAB[criterion] = {
-                A: aIsX ? Number(s.X) : Number(s.Y),
-                B: aIsX ? Number(s.Y) : Number(s.X),
-              };
-            }
-          }
-        }
-
-        promptResults.push({
-          testPrompt,
-          winner,
-          rationale: judgeResult.rationale || null,
-          scores: scoresAB,
-          parseError: judgeResult.parseError || false,
-          rawJudge: judgeResult.parseError ? judgeResult.raw : null,
-          outputA,
-          outputB,
-        });
-      }
-
-      const evalResults = {
-        ts: new Date().toISOString(),
-        labelA: config.labelA,
-        labelB: config.labelB,
-        promptResults,
-        skillASnippet: config.skillA.substring(0, 100),
-        skillBSnippet: config.skillB.substring(0, 100),
+      const newResult = {
+        testPrompt,
+        outputA,
+        outputB,
+        aIsX,
+        winner: null,
+        feedback: null,
       };
 
-      setResults(evalResults);
-      await storageSet(storageKeyResults, evalResults);
-      setStatus("done");
+      // Append or replace in results
+      setResults((prev) => {
+        const base = prev || { ts: new Date().toISOString(), labelA: config.labelA, labelB: config.labelB, promptResults: [] };
+        const updated = { ...base, promptResults: [...base.promptResults] };
+        updated.promptResults[promptIdx] = newResult;
+        storageSet(storageKeyResults, updated);
+        return updated;
+      });
+
+      setCurrentPromptIdx(promptIdx);
+      setStatus("reviewing");
       setProgress("");
     } catch (err) {
       setError(err.message);
@@ -1269,37 +1400,86 @@ Respond with ONLY valid JSON, no markdown fences, no preamble:
     }
   }, [config, apiKey, storageKeyResults]);
 
-  const aggregateResults = useMemo(() => {
-    if (!results || !results.promptResults) return null;
-    const { promptResults: pr } = results;
-    const winsA = pr.filter((r) => r.winner === "A").length;
-    const winsB = pr.filter((r) => r.winner === "B").length;
-    const ties = pr.length - winsA - winsB;
+  // Start eval from the beginning
+  const startEval = useCallback(() => {
+    setResults(null);
+    setCurrentPromptIdx(0);
+    setCurrentWinner(null);
+    setCurrentFeedback("");
+    setRevealed(false);
+    generateForPrompt(0);
+  }, [generateForPrompt]);
 
-    // Average scores per criterion
-    const avgScores = {};
-    const validResults = pr.filter((r) => r.scores);
-    if (validResults.length > 0 && config) {
-      for (const criterion of config.criteria) {
-        let sumA = 0, sumB = 0, count = 0;
-        for (const r of validResults) {
-          if (r.scores[criterion]) {
-            sumA += r.scores[criterion].A;
-            sumB += r.scores[criterion].B;
-            count++;
-          }
-        }
-        if (count > 0) {
-          avgScores[criterion] = {
-            A: (sumA / count).toFixed(1),
-            B: (sumB / count).toFixed(1),
-          };
-        }
-      }
+  // Submit judgment for current prompt, then ask about next
+  const submitCurrentJudgment = useCallback(async () => {
+    if (!results || !currentWinner) return;
+
+    const r = results.promptResults[currentPromptIdx];
+    if (!r) return;
+
+    // Map X/Y back to A/B
+    let winner = null;
+    if (currentWinner === "tie") {
+      winner = "tie";
+    } else if (currentWinner === "X") {
+      winner = r.aIsX ? "A" : "B";
+    } else if (currentWinner === "Y") {
+      winner = r.aIsX ? "B" : "A";
     }
 
-    return { winsA, winsB, ties, avgScores };
-  }, [results, config]);
+    // Update the result
+    const updatedResults = { ...results, promptResults: [...results.promptResults] };
+    updatedResults.promptResults[currentPromptIdx] = {
+      ...r,
+      winner,
+      feedback: currentFeedback.trim() || null,
+    };
+    setResults(updatedResults);
+    await storageSet(storageKeyResults, updatedResults);
+
+    // Push feedback into main feedback system
+    if (onAddFeedback && currentFeedback.trim()) {
+      const winnerLabel = winner === "A" ? results.labelA : winner === "B" ? results.labelB : "tie";
+      onAddFeedback({
+        id: makeId(),
+        text: `[Eval: "${r.testPrompt.substring(0, 80)}"] Winner: ${winnerLabel}. ${currentFeedback.trim()}`,
+        category: "general",
+        ts: new Date().toISOString(),
+        source: "eval",
+      });
+    }
+
+    // Reveal labels after submission
+    setRevealed(true);
+  }, [results, currentPromptIdx, currentWinner, currentFeedback, storageKeyResults, onAddFeedback]);
+
+  // Move to next prompt or finish
+  const proceedToNext = useCallback(() => {
+    const nextIdx = currentPromptIdx + 1;
+    if (nextIdx < config.testPrompts.length) {
+      // Generate for next prompt
+      setCurrentWinner(null);
+      setCurrentFeedback("");
+      setRevealed(false);
+      generateForPrompt(nextIdx);
+    } else {
+      // All done
+      setStatus("done");
+    }
+  }, [currentPromptIdx, config, generateForPrompt]);
+
+  const finishEarly = useCallback(() => {
+    setStatus("done");
+  }, []);
+
+  const aggregateResults = useMemo(() => {
+    if (!results || !results.promptResults) return null;
+    const pr = results.promptResults.filter((r) => r.winner);
+    const winsA = pr.filter((r) => r.winner === "A").length;
+    const winsB = pr.filter((r) => r.winner === "B").length;
+    const ties = pr.filter((r) => r.winner === "tie").length;
+    return { winsA, winsB, ties, total: pr.length };
+  }, [results]);
 
   if (loading) {
     return <p style={{ color: "#888", fontSize: 13 }}>Loading eval config...</p>;
@@ -1307,8 +1487,8 @@ Respond with ONLY valid JSON, no markdown fences, no preamble:
 
   if (!config) return null;
 
-  const toggleExpand = (i) =>
-    setExpandedPrompts((prev) => ({ ...prev, [i]: !prev[i] }));
+  const currentResult = results?.promptResults?.[currentPromptIdx];
+  const hasSubmittedCurrent = currentResult?.winner != null;
 
   return (
     <div>
@@ -1331,9 +1511,10 @@ Respond with ONLY valid JSON, no markdown fences, no preamble:
 
         {!editingConfig && (
           <div style={{ fontSize: 13, color: "#999" }}>
-            {config.testPrompts.length} test prompts, {config.criteria.length} criteria.
+            {config.testPrompts.length} test prompts.
             Comparing <span style={{ color: "#4f8fff" }}>{config.labelA}</span> vs{" "}
             <span style={{ color: "#4fdf8f" }}>{config.labelB}</span>.
+            {" "}One at a time, blind.
           </div>
         )}
 
@@ -1387,51 +1568,6 @@ Respond with ONLY valid JSON, no markdown fences, no preamble:
               </button>
             </div>
 
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 11, color: "#888", marginBottom: 6, textTransform: "uppercase", letterSpacing: 1 }}>
-                Evaluation Criteria
-              </div>
-              {config.criteria.map((c, i) => (
-                <div key={i} style={{ display: "flex", gap: 8, marginBottom: 4 }}>
-                  <input
-                    value={c}
-                    onChange={(e) => {
-                      const updated = { ...config, criteria: [...config.criteria] };
-                      updated.criteria[i] = e.target.value;
-                      saveConfig(updated);
-                    }}
-                    style={{
-                      flex: 1, padding: "6px 10px", borderRadius: 6, border: "1px solid #333",
-                      background: "#111", color: "#e0e0e0", fontSize: 13,
-                    }}
-                  />
-                  <button
-                    onClick={() => {
-                      const updated = { ...config, criteria: config.criteria.filter((_, j) => j !== i) };
-                      saveConfig(updated);
-                    }}
-                    style={{
-                      background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 16, padding: "0 4px",
-                    }}
-                  >
-                    x
-                  </button>
-                </div>
-              ))}
-              <button
-                onClick={() => {
-                  const updated = { ...config, criteria: [...config.criteria, ""] };
-                  saveConfig(updated);
-                }}
-                style={{
-                  padding: "6px 14px", borderRadius: 6, border: "1px solid #333",
-                  background: "transparent", color: "#888", cursor: "pointer", fontSize: 12, marginTop: 4,
-                }}
-              >
-                + Add Criterion
-              </button>
-            </div>
-
             <div>
               <div style={{ fontSize: 11, color: "#888", marginBottom: 6, textTransform: "uppercase", letterSpacing: 1 }}>
                 Skill A ({config.labelA})
@@ -1464,17 +1600,17 @@ Respond with ONLY valid JSON, no markdown fences, no preamble:
         )}
       </div>
 
-      {/* Actions */}
+      {/* Idle — start */}
       {status === "idle" && (
         <div style={{ display: "flex", gap: 12 }}>
           <button
-            onClick={runEval}
+            onClick={startEval}
             style={{
               padding: "12px 28px", borderRadius: 8, border: "none",
               background: "#4f8fff", color: "#fff", fontWeight: 600, cursor: "pointer", fontSize: 15,
             }}
           >
-            Run Eval
+            Start Eval
           </button>
           {onSkipToPreview && (
             <button
@@ -1490,7 +1626,7 @@ Respond with ONLY valid JSON, no markdown fences, no preamble:
         </div>
       )}
 
-      {/* Running state */}
+      {/* Generating */}
       {status === "running" && (
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
@@ -1501,19 +1637,21 @@ Respond with ONLY valid JSON, no markdown fences, no preamble:
                 animation: "spin 0.8s linear infinite",
               }}
             />
-            <span style={{ color: "#e0e0e0", fontSize: 14 }}>Running evaluation...</span>
+            <span style={{ color: "#e0e0e0", fontSize: 14 }}>
+              Test {currentPromptIdx + 1}/{config.testPrompts.length}
+            </span>
           </div>
           <p style={{ color: "#888", fontSize: 13 }}>{progress}</p>
           <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
         </div>
       )}
 
-      {/* Error state */}
+      {/* Error */}
       {status === "error" && (
         <div>
           <p style={{ color: "#ff6b6b", fontSize: 14, marginBottom: 12 }}>{error}</p>
           <button
-            onClick={runEval}
+            onClick={() => generateForPrompt(currentPromptIdx)}
             style={{
               padding: "10px 20px", borderRadius: 6, border: "1px solid #333",
               background: "#1a1a1a", color: "#e0e0e0", cursor: "pointer", fontSize: 14,
@@ -1524,11 +1662,174 @@ Respond with ONLY valid JSON, no markdown fences, no preamble:
         </div>
       )}
 
-      {/* Results */}
+      {/* Reviewing — one prompt at a time */}
+      {status === "reviewing" && currentResult && (
+        <div>
+          {/* Progress indicator */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+            <span style={{ fontSize: 13, color: "#888" }}>
+              Test {currentPromptIdx + 1} of {config.testPrompts.length}
+            </span>
+            <div style={{ display: "flex", gap: 4 }}>
+              {config.testPrompts.map((_, i) => (
+                <div
+                  key={i}
+                  style={{
+                    width: 8, height: 8, borderRadius: "50%",
+                    background: i < currentPromptIdx ? "#4fdf8f"
+                      : i === currentPromptIdx ? "#4f8fff"
+                      : "#333",
+                  }}
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* The prompt */}
+          <div style={{
+            fontSize: 15, color: "#fff", marginBottom: 16, lineHeight: 1.5,
+            fontWeight: 500, padding: "12px 16px", background: "#1a1a1a", borderRadius: 8,
+          }}>
+            {currentResult.testPrompt}
+          </div>
+
+          {/* Full-width output viewer */}
+          <EvalOutputViewer
+            outputA={currentResult.outputA}
+            outputB={currentResult.outputB}
+            aIsX={currentResult.aIsX}
+            revealed={revealed}
+          />
+
+          {/* Judgment area */}
+          {!hasSubmittedCurrent && (
+            <div style={{ marginTop: 20 }}>
+              {/* Pick winner */}
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}>
+                <span style={{ fontSize: 13, color: "#888", marginRight: 4 }}>Winner:</span>
+                {["X", "Y", "tie"].map((choice) => (
+                  <button
+                    key={choice}
+                    onClick={() => setCurrentWinner(choice)}
+                    style={{
+                      padding: "8px 20px", borderRadius: 6, fontSize: 14, cursor: "pointer",
+                      fontWeight: currentWinner === choice ? 700 : 400,
+                      border: currentWinner === choice ? "2px solid" : "1px solid #444",
+                      borderColor: currentWinner === choice
+                        ? (choice === "X" ? "#4f8fff" : choice === "Y" ? "#4fdf8f" : "#888")
+                        : "#444",
+                      background: currentWinner === choice
+                        ? (choice === "X" ? "#1a2a4a" : choice === "Y" ? "#1a3a2a" : "#222")
+                        : "transparent",
+                      color: currentWinner === choice
+                        ? (choice === "X" ? "#4f8fff" : choice === "Y" ? "#4fdf8f" : "#ccc")
+                        : "#666",
+                    }}
+                  >
+                    {choice === "tie" ? "Tie" : `Output ${choice}`}
+                  </button>
+                ))}
+              </div>
+
+              {/* Feedback */}
+              {currentWinner && (
+                <textarea
+                  value={currentFeedback}
+                  onChange={(e) => setCurrentFeedback(e.target.value)}
+                  placeholder="What made the winner better? What should the loser have done differently? (optional)"
+                  rows={3}
+                  style={{
+                    width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #333",
+                    background: "#1a1a1a", color: "#e0e0e0", fontSize: 14, fontFamily: "inherit",
+                    resize: "vertical", marginBottom: 12,
+                  }}
+                />
+              )}
+
+              {/* Submit */}
+              <button
+                onClick={submitCurrentJudgment}
+                disabled={!currentWinner}
+                style={{
+                  padding: "10px 24px", borderRadius: 8, border: "none",
+                  background: currentWinner ? "#4fdf8f" : "#333",
+                  color: currentWinner ? "#111" : "#666",
+                  fontWeight: 600, cursor: currentWinner ? "pointer" : "not-allowed", fontSize: 14,
+                }}
+              >
+                Submit
+              </button>
+            </div>
+          )}
+
+          {/* After submitting — reveal + next prompt option */}
+          {hasSubmittedCurrent && (
+            <div style={{ marginTop: 20 }}>
+              <div style={{
+                padding: "12px 16px", background: "#1a2e1a", borderRadius: 8,
+                border: "1px solid #2a3e2a", marginBottom: 16,
+              }}>
+                <span style={{
+                  fontSize: 14, fontWeight: 600,
+                  color: currentResult.winner === "A" ? "#4f8fff" : currentResult.winner === "B" ? "#4fdf8f" : "#888",
+                }}>
+                  You picked: {currentResult.winner === "A" ? results.labelA : currentResult.winner === "B" ? results.labelB : "Tie"}
+                </span>
+                {currentResult.feedback && (
+                  <p style={{ fontSize: 12, color: "#999", margin: "6px 0 0 0", fontStyle: "italic" }}>
+                    "{currentResult.feedback}"
+                  </p>
+                )}
+              </div>
+
+              <div style={{ display: "flex", gap: 12 }}>
+                {currentPromptIdx + 1 < config.testPrompts.length ? (
+                  <>
+                    <button
+                      onClick={proceedToNext}
+                      style={{
+                        padding: "12px 28px", borderRadius: 8, border: "none",
+                        background: "#4f8fff", color: "#fff", fontWeight: 600,
+                        cursor: "pointer", fontSize: 15,
+                      }}
+                    >
+                      Next Test ({currentPromptIdx + 2}/{config.testPrompts.length})
+                    </button>
+                    <button
+                      onClick={finishEarly}
+                      style={{
+                        padding: "12px 28px", borderRadius: 8, border: "1px solid #333",
+                        background: "transparent", color: "#888", cursor: "pointer", fontSize: 15,
+                      }}
+                    >
+                      Done — see results
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={finishEarly}
+                    style={{
+                      padding: "12px 28px", borderRadius: 8, border: "none",
+                      background: "#4fdf8f", color: "#111", fontWeight: 600,
+                      cursor: "pointer", fontSize: 15,
+                    }}
+                  >
+                    See Results
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Done — aggregate results */}
       {status === "done" && results && aggregateResults && (
         <div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-            <span style={{ color: "#4fdf8f", fontSize: 14, fontWeight: 600 }}>Eval complete</span>
+            <span style={{ color: "#4fdf8f", fontSize: 14, fontWeight: 600 }}>
+              Eval complete — {aggregateResults.total} test{aggregateResults.total !== 1 ? "s" : ""} judged
+            </span>
             <div style={{ display: "flex", gap: 8 }}>
               {onSkipToPreview && (
                 <button
@@ -1542,13 +1843,13 @@ Respond with ONLY valid JSON, no markdown fences, no preamble:
                 </button>
               )}
               <button
-                onClick={runEval}
+                onClick={startEval}
                 style={{
                   padding: "6px 14px", borderRadius: 6, border: "1px solid #333",
                   background: "transparent", color: "#888", cursor: "pointer", fontSize: 12,
                 }}
               >
-                Run again
+                New round
               </button>
             </div>
           </div>
@@ -1560,163 +1861,50 @@ Respond with ONLY valid JSON, no markdown fences, no preamble:
               marginBottom: 16, fontSize: 15, fontWeight: 600, textAlign: "center",
             }}
           >
-            {aggregateResults.winsA === aggregateResults.winsB ? (
-              <span style={{ color: "#888" }}>
-                Tie: {aggregateResults.winsA}-{aggregateResults.winsB}
-                {aggregateResults.ties > 0 ? `-${aggregateResults.ties}` : ""}
-              </span>
-            ) : aggregateResults.winsA > aggregateResults.winsB ? (
-              <span>
-                <span style={{ color: "#4f8fff" }}>{results.labelA}</span>
-                <span style={{ color: "#888" }}> won {aggregateResults.winsA}/{results.promptResults.length}</span>
-              </span>
-            ) : (
-              <span>
-                <span style={{ color: "#4fdf8f" }}>{results.labelB}</span>
-                <span style={{ color: "#888" }}> won {aggregateResults.winsB}/{results.promptResults.length}</span>
-              </span>
+            <span style={{ color: "#4f8fff" }}>{results.labelA}: {aggregateResults.winsA}</span>
+            <span style={{ color: "#555", margin: "0 12px" }}>/</span>
+            <span style={{ color: "#4fdf8f" }}>{results.labelB}: {aggregateResults.winsB}</span>
+            {aggregateResults.ties > 0 && (
+              <>
+                <span style={{ color: "#555", margin: "0 12px" }}>/</span>
+                <span style={{ color: "#888" }}>Ties: {aggregateResults.ties}</span>
+              </>
             )}
           </div>
 
-          {/* Aggregate scores table */}
-          {Object.keys(aggregateResults.avgScores).length > 0 && (
-            <div style={{ marginBottom: 20 }}>
-              <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 1, color: "#888", marginBottom: 8 }}>
-                Average Scores by Criterion
-              </div>
-              <div style={{ background: "#1a1a1a", borderRadius: 8, overflow: "hidden" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                  <thead>
-                    <tr style={{ borderBottom: "1px solid #333" }}>
-                      <th style={{ padding: "10px 14px", textAlign: "left", color: "#888", fontWeight: 500 }}>Criterion</th>
-                      <th style={{ padding: "10px 14px", textAlign: "center", color: "#4f8fff", fontWeight: 600, width: 80 }}>{results.labelA}</th>
-                      <th style={{ padding: "10px 14px", textAlign: "center", color: "#4fdf8f", fontWeight: 600, width: 80 }}>{results.labelB}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {Object.entries(aggregateResults.avgScores).map(([criterion, scores]) => (
-                      <tr key={criterion} style={{ borderBottom: "1px solid #222" }}>
-                        <td style={{ padding: "8px 14px", color: "#ccc" }}>{criterion}</td>
-                        <td style={{
-                          padding: "8px 14px", textAlign: "center", fontWeight: 600,
-                          color: Number(scores.A) >= Number(scores.B) ? "#4f8fff" : "#888",
-                        }}>
-                          {scores.A}
-                        </td>
-                        <td style={{
-                          padding: "8px 14px", textAlign: "center", fontWeight: 600,
-                          color: Number(scores.B) >= Number(scores.A) ? "#4fdf8f" : "#888",
-                        }}>
-                          {scores.B}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+          {/* Feedback logged notice */}
+          {results.promptResults.some((r) => r.feedback) && (
+            <div style={{
+              padding: "10px 14px", background: "#1a2e1a", borderRadius: 8,
+              marginBottom: 16, fontSize: 12, color: "#4fdf8f", border: "1px solid #2a3e2a",
+            }}>
+              Your eval feedback has been added to the Feedback tab and will inform the next research cycle.
             </div>
           )}
 
-          {/* Per-prompt cards */}
-          <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 1, color: "#888", marginBottom: 8 }}>
-            Per-Prompt Results
-          </div>
-          {results.promptResults.map((r, i) => (
+          {/* Per-prompt results */}
+          {results.promptResults.filter((r) => r.winner).map((r, i) => (
             <div
               key={i}
               style={{ padding: 14, background: "#1a1a1a", borderRadius: 8, marginBottom: 8 }}
             >
-              <div style={{ fontSize: 13, color: "#e0e0e0", marginBottom: 8, lineHeight: 1.5 }}>
+              <div style={{ fontSize: 13, color: "#e0e0e0", marginBottom: 6, lineHeight: 1.5 }}>
                 {r.testPrompt}
               </div>
-              {r.parseError ? (
-                <div>
-                  <p style={{ color: "#ff6b6b", fontSize: 12 }}>Judge response could not be parsed.</p>
-                  <pre style={{
-                    padding: 10, background: "#111", borderRadius: 6, fontSize: 11,
-                    color: "#999", whiteSpace: "pre-wrap", maxHeight: 200, overflow: "auto",
-                  }}>
-                    {r.rawJudge}
-                  </pre>
-                </div>
-              ) : (
-                <div>
-                  <div style={{ marginBottom: 6 }}>
-                    <span style={{
-                      fontSize: 12, fontWeight: 600,
-                      color: r.winner === "A" ? "#4f8fff" : r.winner === "B" ? "#4fdf8f" : "#888",
-                    }}>
-                      Winner: {r.winner === "A" ? results.labelA : r.winner === "B" ? results.labelB : "Unknown"}
-                    </span>
-                  </div>
-                  {r.rationale && (
-                    <p style={{ fontSize: 12, color: "#999", lineHeight: 1.5, margin: "0 0 8px 0" }}>
-                      {r.rationale}
-                    </p>
-                  )}
-                  {r.scores && (
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                      {Object.entries(r.scores).map(([criterion, s]) => (
-                        <div
-                          key={criterion}
-                          style={{
-                            fontSize: 11, padding: "3px 8px", background: "#111",
-                            borderRadius: 4, color: "#888",
-                          }}
-                        >
-                          {criterion.substring(0, 20)}{criterion.length > 20 ? "..." : ""}:{" "}
-                          <span style={{ color: "#4f8fff" }}>{s.A}</span>
-                          {" / "}
-                          <span style={{ color: "#4fdf8f" }}>{s.B}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-              {/* Expandable outputs */}
-              <button
-                onClick={() => toggleExpand(i)}
-                style={{
-                  marginTop: 8, padding: "4px 10px", borderRadius: 4,
-                  border: "1px solid #333", background: "transparent",
-                  color: "#666", cursor: "pointer", fontSize: 11,
-                }}
-              >
-                {expandedPrompts[i] ? "Hide outputs" : "Show full outputs"}
-              </button>
-              {expandedPrompts[i] && (
-                <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                  <div>
-                    <div style={{ fontSize: 11, color: "#4f8fff", marginBottom: 4, fontWeight: 600 }}>
-                      {results.labelA}
-                    </div>
-                    <pre style={{
-                      padding: 10, background: "#111", borderRadius: 6, fontSize: 11,
-                      color: "#ccc", whiteSpace: "pre-wrap", maxHeight: 300, overflow: "auto",
-                      lineHeight: 1.5,
-                    }}>
-                      {r.outputA}
-                    </pre>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 11, color: "#4fdf8f", marginBottom: 4, fontWeight: 600 }}>
-                      {results.labelB}
-                    </div>
-                    <pre style={{
-                      padding: 10, background: "#111", borderRadius: 6, fontSize: 11,
-                      color: "#ccc", whiteSpace: "pre-wrap", maxHeight: 300, overflow: "auto",
-                      lineHeight: 1.5,
-                    }}>
-                      {r.outputB}
-                    </pre>
-                  </div>
-                </div>
+              <span style={{
+                fontSize: 13, fontWeight: 600,
+                color: r.winner === "A" ? "#4f8fff" : r.winner === "B" ? "#4fdf8f" : "#888",
+              }}>
+                {r.winner === "A" ? results.labelA : r.winner === "B" ? results.labelB : "Tie"}
+              </span>
+              {r.feedback && (
+                <p style={{ fontSize: 12, color: "#999", lineHeight: 1.5, margin: "4px 0 0 0", fontStyle: "italic" }}>
+                  "{r.feedback}"
+                </p>
               )}
             </div>
           ))}
 
-          {/* Timestamp */}
           <div style={{ fontSize: 11, color: "#555", marginTop: 12, textAlign: "right" }}>
             Ran {new Date(results.ts).toLocaleString()}
           </div>
@@ -1960,7 +2148,7 @@ export default function SkillEvolver() {
         fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
       }}
     >
-      <div style={{ maxWidth: 760, margin: "0 auto", padding: "32px 20px" }}>
+      <div style={{ maxWidth: tab === "eval" ? 1100 : 760, margin: "0 auto", padding: "32px 20px", transition: "max-width 0.2s" }}>
         {/* Header */}
         <div style={{ marginBottom: 32 }}>
           <div
@@ -2147,6 +2335,7 @@ export default function SkillEvolver() {
               setTab("research");
               setEvalPromptAfterResearch(false);
             } : null}
+            onAddFeedback={handleAddFeedback}
           />
         )}
 
