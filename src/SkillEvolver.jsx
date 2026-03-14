@@ -1,4 +1,68 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
+
+const REVISED_SKILL = `---
+name: frontend-design
+description: Create distinctive, production-grade frontend interfaces with high design quality. Use this skill when the user asks to build web components, pages, artifacts, posters, or applications (examples include websites, landing pages, dashboards, React components, HTML/CSS layouts, or when styling/beautifying any web UI). Generates creative, polished code and UI design that avoids generic AI aesthetics.
+license: Complete terms in LICENSE.txt
+---
+
+This skill guides creation of distinctive, production-grade frontend interfaces that avoid generic "AI slop" aesthetics. Implement real working code with exceptional attention to aesthetic details and creative choices.
+
+The user provides frontend requirements: a component, page, application, or interface to build. They may include context about the purpose, audience, or technical constraints.
+
+## Design Thinking
+
+Before coding, understand the context and commit to a BOLD aesthetic direction:
+- **Purpose**: What problem does this interface solve? Who uses it?
+- **Tone**: Pick an extreme: brutally minimal, maximalist chaos, retro-futuristic, organic/natural, luxury/refined, playful/toy-like, editorial/magazine, brutalist/raw, art deco/geometric, soft/pastel, industrial/utilitarian, etc. There are so many flavors to choose from. Use these for inspiration but design one that is true to the aesthetic direction.
+- **Constraints**: Technical requirements (framework, performance, accessibility).
+- **Differentiation**: What makes this UNFORGETTABLE? What's the one thing someone will remember?
+
+**CRITICAL**: Choose a clear conceptual direction and execute it with precision. Bold maximalism and refined minimalism both work - the key is intentionality, not intensity. After years of AI experimentation and template fatigue, prioritize authenticity and human-centered approaches over algorithmic sameness.
+
+Then implement working code (HTML/CSS/JS, React, Vue, etc.) that is:
+- Production-grade and functional
+- Visually striking and memorable
+- Cohesive with a clear aesthetic point-of-view
+- Meticulously refined in every detail
+
+## Frontend Aesthetics Guidelines
+
+Focus on:
+- **Typography**: Choose fonts that are beautiful, unique, and interesting. Embrace trending categories like film-inspired serifs (wide apertures, soft bracketed serifs), funky curvy serifs, quiet sans-serifs, and kinetic typography that reflects emotion and personality. Pair expressive display fonts with practical, readable body fonts. Examples: Playfair Display + Lato, Bebas Neue + Open Sans, or Poppins + DM Serif Display. Avoid overused choices and prioritize contrast between personality and readability.
+
+- **Color & Theme**: Commit to a cohesive aesthetic using CSS variables with data attributes for maximum flexibility. Use \`data-theme="light|dark"\` patterns for user-controlled toggles. Dominant colors with sharp accents outperform timid, evenly-distributed palettes. Move beyond ultra-minimal white space aesthetics toward designs that feel alive and intentional.
+
+- **Motion**: Leverage production-ready CSS features: native scroll-driven animations, view transitions API for same-document transitions, and the :has() selector for state-based animations. For React, use Motion (formerly Framer Motion) for UI animations and component transitions, or GSAP for complex timeline-based work. Focus on meaningful motion over dramatic effects: scroll-triggered interactions, subtle micro-interactions, and kinetic typography. Prioritize one well-orchestrated experience with staggered reveals over scattered effects.
+
+- **Spatial Composition**: Create layouts that feel handmade and human rather than algorithmically generated. Avoid "Frankenstein layouts" that feel randomly pieced together. Use intentional asymmetry, overlap, diagonal flow, and grid-breaking elements. Balance negative space with controlled density, ensuring every element serves the overall aesthetic vision.
+
+- **Backgrounds & Visual Details**: Create atmosphere through organic textures and intentional imperfection. Use gradient meshes, noise textures, layered transparencies, and subtle grain overlays that feel crafted rather than template-based. Implement CSS container queries for responsive visual effects and anchor positioning for sophisticated layouts.
+
+## Modern CSS & Component Patterns
+
+Utilize production-ready 2026 features:
+- **Native CSS nesting** (96% browser support) - eliminate preprocessor dependency
+- **Container queries** for truly responsive components
+- **:has() selector** for parent-based styling and reduced JavaScript
+- **View Transitions API** for smooth page transitions in supported browsers
+- **CSS anchor positioning** for sophisticated floating elements
+
+For React projects:
+- Use **shadcn/ui** with Radix primitives for headless, accessible components you own entirely
+- Consider **React Server Components** with Next.js for performance benefits
+- Leverage **Radix UI** or **Ark UI** for cross-framework headless component foundations
+- Implement theming with CSS variables rather than runtime styling systems
+
+NEVER use generic AI-generated aesthetics like overused font families (Inter, Roboto, Arial, system fonts, Space Grotesk), cliched color schemes (particularly purple gradients on white backgrounds), predictable layouts and component patterns, ultra-minimal designs with excessive white space that lack personality, polished stock imagery or AI-generated visuals with uncanny smoothness, and cookie-cutter design that lacks context-specific character.
+
+Instead, draw inspiration from leading design systems: Linear's precisely calibrated minimalism with subtle animations, Stripe's flowing gradient animations that convey technical sophistication, and Vercel's streamlined navigation patterns that prioritize user workflow.
+
+Interpret creatively and make unexpected choices that feel genuinely designed for the context. No design should be the same. Vary between light and dark themes, different fonts, different aesthetics. Create designs that feel intentional, human-centered, and alive rather than template-based or algorithmically generated.
+
+**IMPORTANT**: Match implementation complexity to the aesthetic vision. Maximalist designs need elaborate code with extensive animations and effects. Minimalist or refined designs need restraint, precision, and careful attention to spacing, typography, and subtle details. Elegance comes from executing the vision well, not from following generic patterns.
+
+Remember: Claude is capable of extraordinary creative work. Don't hold back, show what can truly be created when thinking outside the box and committing fully to a distinctive vision that feels authentically human and purposefully crafted.`;
 
 const CURRENT_SKILL = `---
 name: frontend-design
@@ -71,7 +135,7 @@ async function storageSet(key, value) {
   }
 }
 
-async function callClaude(messages, useSearch = false, apiKey = "") {
+async function callClaude(messages, useSearch = false, apiKey = "", systemPrompt = "") {
   if (!apiKey) throw new Error("API key is required. Enter your Anthropic API key above.");
 
   const body = {
@@ -79,6 +143,9 @@ async function callClaude(messages, useSearch = false, apiKey = "") {
     max_tokens: 4096,
     messages,
   };
+  if (systemPrompt) {
+    body.system = systemPrompt;
+  }
   if (useSearch) {
     body.tools = [{ type: "web_search_20250305", name: "web_search" }];
   }
@@ -657,6 +724,660 @@ function HistoryPanel({ history }) {
   );
 }
 
+const DEFAULT_EVAL_CONFIG = {
+  skillA: CURRENT_SKILL,
+  skillB: REVISED_SKILL,
+  labelA: "Original",
+  labelB: "Revised",
+  testPrompts: [
+    "Build a dashboard for tracking daily reading habits with a focus on streaks and genre breakdown",
+    "Create a landing page for a small-batch ceramics studio that sells online",
+    "Design a settings panel for a desktop music production app",
+  ],
+  criteria: [
+    "Visual distinctiveness and memorability",
+    "Typography choices (avoids generic fonts, good pairing)",
+    "Code quality and production-readiness",
+    "Avoidance of generic AI aesthetic patterns",
+    "Layout creativity and spatial composition",
+  ],
+};
+
+function EvalPanel({ apiKey, skillId, currentSkill, proposedSkill, onSkipToPreview }) {
+  const storageKeyConfig = `skill-evolver:${skillId}:eval-config`;
+  const storageKeyResults = `skill-evolver:${skillId}:eval-results`;
+
+  const [config, setConfig] = useState(null);
+  const [results, setResults] = useState(null);
+  const [status, setStatus] = useState("idle"); // idle | running | done | error
+  const [progress, setProgress] = useState("");
+  const [error, setError] = useState(null);
+  const [expandedPrompts, setExpandedPrompts] = useState({});
+  const [editingConfig, setEditingConfig] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  // Load config and results from storage
+  useEffect(() => {
+    (async () => {
+      let savedConfig = await storageGet(storageKeyConfig);
+      if (!savedConfig) {
+        savedConfig = { ...DEFAULT_EVAL_CONFIG };
+        // If we have a proposed skill, use it as B
+        if (proposedSkill) {
+          savedConfig.skillB = proposedSkill;
+          savedConfig.labelB = "Proposed";
+        }
+      }
+      // Always update skillA to current if provided
+      if (currentSkill) {
+        savedConfig.skillA = currentSkill;
+        savedConfig.labelA = "Current";
+      }
+      if (proposedSkill) {
+        savedConfig.skillB = proposedSkill;
+        savedConfig.labelB = "Proposed";
+      }
+      setConfig(savedConfig);
+      await storageSet(storageKeyConfig, savedConfig);
+
+      const savedResults = await storageGet(storageKeyResults);
+      if (savedResults) {
+        setResults(savedResults);
+        setStatus("done");
+      }
+      setLoading(false);
+    })();
+  }, [storageKeyConfig, storageKeyResults, currentSkill, proposedSkill]);
+
+  const saveConfig = async (updated) => {
+    setConfig(updated);
+    await storageSet(storageKeyConfig, updated);
+  };
+
+  const runEval = useCallback(async () => {
+    if (!config) return;
+    setStatus("running");
+    setError(null);
+    setResults(null);
+
+    const promptResults = [];
+
+    try {
+      for (let i = 0; i < config.testPrompts.length; i++) {
+        const testPrompt = config.testPrompts[i];
+        setProgress(`Running prompt ${i + 1}/${config.testPrompts.length}: generating output A...`);
+
+        // Generate output A
+        const outputA = await callClaude(
+          [{ role: "user", content: testPrompt }],
+          false,
+          apiKey,
+          config.skillA
+        );
+
+        setProgress(`Running prompt ${i + 1}/${config.testPrompts.length}: generating output B...`);
+
+        // Generate output B
+        const outputB = await callClaude(
+          [{ role: "user", content: testPrompt }],
+          false,
+          apiKey,
+          config.skillB
+        );
+
+        // Randomly assign to X/Y
+        const aIsX = Math.random() < 0.5;
+        const outputX = aIsX ? outputA : outputB;
+        const outputY = aIsX ? outputB : outputA;
+
+        setProgress(`Running prompt ${i + 1}/${config.testPrompts.length}: judging outputs...`);
+
+        // Judge
+        const judgePrompt = `You are evaluating two frontend code outputs for the same design prompt. You do not know which system produced which output. Evaluate strictly on quality.
+
+Design prompt: "${testPrompt}"
+
+=== Output X ===
+${outputX}
+
+=== Output Y ===
+${outputY}
+
+Evaluate on these criteria: ${config.criteria.join(", ")}
+
+Respond with ONLY valid JSON, no markdown fences, no preamble:
+{
+  "preferred": "X" or "Y",
+  "rationale": "2-3 sentence explanation of why the preferred output is stronger",
+  "scores": {
+    ${config.criteria.map((c) => `"${c}": {"X": "<1-10>", "Y": "<1-10>"}`).join(",\n    ")}
+  }
+}`;
+
+        const judgeRaw = await callClaude(
+          [{ role: "user", content: judgePrompt }],
+          false,
+          apiKey
+        );
+
+        let judgeResult;
+        try {
+          // Strip markdown fences if present
+          const cleaned = judgeRaw.replace(/```(?:json)?\s*/g, "").replace(/```\s*/g, "").trim();
+          judgeResult = JSON.parse(cleaned);
+        } catch {
+          judgeResult = { parseError: true, raw: judgeRaw };
+        }
+
+        // Map back from X/Y to A/B
+        let winner = null;
+        if (judgeResult.preferred === "X") winner = aIsX ? "A" : "B";
+        else if (judgeResult.preferred === "Y") winner = aIsX ? "B" : "A";
+
+        // Convert scores from X/Y to A/B
+        let scoresAB = null;
+        if (judgeResult.scores && !judgeResult.parseError) {
+          scoresAB = {};
+          for (const criterion of config.criteria) {
+            const s = judgeResult.scores[criterion];
+            if (s) {
+              scoresAB[criterion] = {
+                A: aIsX ? Number(s.X) : Number(s.Y),
+                B: aIsX ? Number(s.Y) : Number(s.X),
+              };
+            }
+          }
+        }
+
+        promptResults.push({
+          testPrompt,
+          winner,
+          rationale: judgeResult.rationale || null,
+          scores: scoresAB,
+          parseError: judgeResult.parseError || false,
+          rawJudge: judgeResult.parseError ? judgeResult.raw : null,
+          outputA,
+          outputB,
+        });
+      }
+
+      const evalResults = {
+        ts: new Date().toISOString(),
+        labelA: config.labelA,
+        labelB: config.labelB,
+        promptResults,
+        skillASnippet: config.skillA.substring(0, 100),
+        skillBSnippet: config.skillB.substring(0, 100),
+      };
+
+      setResults(evalResults);
+      await storageSet(storageKeyResults, evalResults);
+      setStatus("done");
+      setProgress("");
+    } catch (err) {
+      setError(err.message);
+      setStatus("error");
+      setProgress("");
+    }
+  }, [config, apiKey, storageKeyResults]);
+
+  const aggregateResults = useMemo(() => {
+    if (!results || !results.promptResults) return null;
+    const { promptResults: pr } = results;
+    const winsA = pr.filter((r) => r.winner === "A").length;
+    const winsB = pr.filter((r) => r.winner === "B").length;
+    const ties = pr.length - winsA - winsB;
+
+    // Average scores per criterion
+    const avgScores = {};
+    const validResults = pr.filter((r) => r.scores);
+    if (validResults.length > 0 && config) {
+      for (const criterion of config.criteria) {
+        let sumA = 0, sumB = 0, count = 0;
+        for (const r of validResults) {
+          if (r.scores[criterion]) {
+            sumA += r.scores[criterion].A;
+            sumB += r.scores[criterion].B;
+            count++;
+          }
+        }
+        if (count > 0) {
+          avgScores[criterion] = {
+            A: (sumA / count).toFixed(1),
+            B: (sumB / count).toFixed(1),
+          };
+        }
+      }
+    }
+
+    return { winsA, winsB, ties, avgScores };
+  }, [results, config]);
+
+  if (loading) {
+    return <p style={{ color: "#888", fontSize: 13 }}>Loading eval config...</p>;
+  }
+
+  if (!config) return null;
+
+  const toggleExpand = (i) =>
+    setExpandedPrompts((prev) => ({ ...prev, [i]: !prev[i] }));
+
+  return (
+    <div>
+      {/* Config section */}
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <span style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: 1, color: "#888" }}>
+            Eval Configuration
+          </span>
+          <button
+            onClick={() => setEditingConfig(!editingConfig)}
+            style={{
+              padding: "4px 12px", borderRadius: 6, border: "1px solid #333",
+              background: "transparent", color: "#888", cursor: "pointer", fontSize: 12,
+            }}
+          >
+            {editingConfig ? "Collapse" : "Edit Config"}
+          </button>
+        </div>
+
+        {!editingConfig && (
+          <div style={{ fontSize: 13, color: "#999" }}>
+            {config.testPrompts.length} test prompts, {config.criteria.length} criteria.
+            Comparing <span style={{ color: "#4f8fff" }}>{config.labelA}</span> vs{" "}
+            <span style={{ color: "#4fdf8f" }}>{config.labelB}</span>.
+          </div>
+        )}
+
+        {editingConfig && (
+          <div style={{ padding: 16, background: "#1a1a1a", borderRadius: 8 }}>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 11, color: "#888", marginBottom: 6, textTransform: "uppercase", letterSpacing: 1 }}>
+                Test Prompts
+              </div>
+              {config.testPrompts.map((p, i) => (
+                <div key={i} style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+                  <textarea
+                    value={p}
+                    onChange={(e) => {
+                      const updated = { ...config, testPrompts: [...config.testPrompts] };
+                      updated.testPrompts[i] = e.target.value;
+                      saveConfig(updated);
+                    }}
+                    rows={2}
+                    style={{
+                      flex: 1, padding: "8px 10px", borderRadius: 6, border: "1px solid #333",
+                      background: "#111", color: "#e0e0e0", fontSize: 13, fontFamily: "inherit",
+                      resize: "vertical",
+                    }}
+                  />
+                  <button
+                    onClick={() => {
+                      const updated = { ...config, testPrompts: config.testPrompts.filter((_, j) => j !== i) };
+                      saveConfig(updated);
+                    }}
+                    style={{
+                      background: "none", border: "none", color: "#555", cursor: "pointer",
+                      fontSize: 16, padding: "0 4px", alignSelf: "flex-start",
+                    }}
+                  >
+                    x
+                  </button>
+                </div>
+              ))}
+              <button
+                onClick={() => {
+                  const updated = { ...config, testPrompts: [...config.testPrompts, ""] };
+                  saveConfig(updated);
+                }}
+                style={{
+                  padding: "6px 14px", borderRadius: 6, border: "1px solid #333",
+                  background: "transparent", color: "#888", cursor: "pointer", fontSize: 12,
+                }}
+              >
+                + Add Prompt
+              </button>
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 11, color: "#888", marginBottom: 6, textTransform: "uppercase", letterSpacing: 1 }}>
+                Evaluation Criteria
+              </div>
+              {config.criteria.map((c, i) => (
+                <div key={i} style={{ display: "flex", gap: 8, marginBottom: 4 }}>
+                  <input
+                    value={c}
+                    onChange={(e) => {
+                      const updated = { ...config, criteria: [...config.criteria] };
+                      updated.criteria[i] = e.target.value;
+                      saveConfig(updated);
+                    }}
+                    style={{
+                      flex: 1, padding: "6px 10px", borderRadius: 6, border: "1px solid #333",
+                      background: "#111", color: "#e0e0e0", fontSize: 13,
+                    }}
+                  />
+                  <button
+                    onClick={() => {
+                      const updated = { ...config, criteria: config.criteria.filter((_, j) => j !== i) };
+                      saveConfig(updated);
+                    }}
+                    style={{
+                      background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 16, padding: "0 4px",
+                    }}
+                  >
+                    x
+                  </button>
+                </div>
+              ))}
+              <button
+                onClick={() => {
+                  const updated = { ...config, criteria: [...config.criteria, ""] };
+                  saveConfig(updated);
+                }}
+                style={{
+                  padding: "6px 14px", borderRadius: 6, border: "1px solid #333",
+                  background: "transparent", color: "#888", cursor: "pointer", fontSize: 12, marginTop: 4,
+                }}
+              >
+                + Add Criterion
+              </button>
+            </div>
+
+            <div>
+              <div style={{ fontSize: 11, color: "#888", marginBottom: 6, textTransform: "uppercase", letterSpacing: 1 }}>
+                Skill A ({config.labelA})
+              </div>
+              <textarea
+                value={config.skillA}
+                onChange={(e) => saveConfig({ ...config, skillA: e.target.value })}
+                rows={4}
+                style={{
+                  width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #333",
+                  background: "#111", color: "#e0e0e0", fontSize: 12, fontFamily: "monospace",
+                  resize: "vertical", marginBottom: 12,
+                }}
+              />
+              <div style={{ fontSize: 11, color: "#888", marginBottom: 6, textTransform: "uppercase", letterSpacing: 1 }}>
+                Skill B ({config.labelB})
+              </div>
+              <textarea
+                value={config.skillB}
+                onChange={(e) => saveConfig({ ...config, skillB: e.target.value })}
+                rows={4}
+                style={{
+                  width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #333",
+                  background: "#111", color: "#e0e0e0", fontSize: 12, fontFamily: "monospace",
+                  resize: "vertical",
+                }}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Actions */}
+      {status === "idle" && (
+        <div style={{ display: "flex", gap: 12 }}>
+          <button
+            onClick={runEval}
+            style={{
+              padding: "12px 28px", borderRadius: 8, border: "none",
+              background: "#4f8fff", color: "#fff", fontWeight: 600, cursor: "pointer", fontSize: 15,
+            }}
+          >
+            Run Eval
+          </button>
+          {onSkipToPreview && (
+            <button
+              onClick={onSkipToPreview}
+              style={{
+                padding: "12px 28px", borderRadius: 8, border: "1px solid #333",
+                background: "transparent", color: "#888", cursor: "pointer", fontSize: 15,
+              }}
+            >
+              Skip Eval
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Running state */}
+      {status === "running" && (
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
+            <div
+              style={{
+                width: 16, height: 16, border: "2px solid #4f8fff",
+                borderTopColor: "transparent", borderRadius: "50%",
+                animation: "spin 0.8s linear infinite",
+              }}
+            />
+            <span style={{ color: "#e0e0e0", fontSize: 14 }}>Running evaluation...</span>
+          </div>
+          <p style={{ color: "#888", fontSize: 13 }}>{progress}</p>
+          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        </div>
+      )}
+
+      {/* Error state */}
+      {status === "error" && (
+        <div>
+          <p style={{ color: "#ff6b6b", fontSize: 14, marginBottom: 12 }}>{error}</p>
+          <button
+            onClick={runEval}
+            style={{
+              padding: "10px 20px", borderRadius: 6, border: "1px solid #333",
+              background: "#1a1a1a", color: "#e0e0e0", cursor: "pointer", fontSize: 14,
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {/* Results */}
+      {status === "done" && results && aggregateResults && (
+        <div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+            <span style={{ color: "#4fdf8f", fontSize: 14, fontWeight: 600 }}>Eval complete</span>
+            <div style={{ display: "flex", gap: 8 }}>
+              {onSkipToPreview && (
+                <button
+                  onClick={onSkipToPreview}
+                  style={{
+                    padding: "6px 14px", borderRadius: 6, border: "1px solid #333",
+                    background: "transparent", color: "#888", cursor: "pointer", fontSize: 12,
+                  }}
+                >
+                  Go to Preview
+                </button>
+              )}
+              <button
+                onClick={runEval}
+                style={{
+                  padding: "6px 14px", borderRadius: 6, border: "1px solid #333",
+                  background: "transparent", color: "#888", cursor: "pointer", fontSize: 12,
+                }}
+              >
+                Run again
+              </button>
+            </div>
+          </div>
+
+          {/* Summary bar */}
+          <div
+            style={{
+              padding: "14px 18px", background: "#1a1a1a", borderRadius: 8,
+              marginBottom: 16, fontSize: 15, fontWeight: 600, textAlign: "center",
+            }}
+          >
+            {aggregateResults.winsA === aggregateResults.winsB ? (
+              <span style={{ color: "#888" }}>
+                Tie: {aggregateResults.winsA}-{aggregateResults.winsB}
+                {aggregateResults.ties > 0 ? `-${aggregateResults.ties}` : ""}
+              </span>
+            ) : aggregateResults.winsA > aggregateResults.winsB ? (
+              <span>
+                <span style={{ color: "#4f8fff" }}>{results.labelA}</span>
+                <span style={{ color: "#888" }}> won {aggregateResults.winsA}/{results.promptResults.length}</span>
+              </span>
+            ) : (
+              <span>
+                <span style={{ color: "#4fdf8f" }}>{results.labelB}</span>
+                <span style={{ color: "#888" }}> won {aggregateResults.winsB}/{results.promptResults.length}</span>
+              </span>
+            )}
+          </div>
+
+          {/* Aggregate scores table */}
+          {Object.keys(aggregateResults.avgScores).length > 0 && (
+            <div style={{ marginBottom: 20 }}>
+              <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 1, color: "#888", marginBottom: 8 }}>
+                Average Scores by Criterion
+              </div>
+              <div style={{ background: "#1a1a1a", borderRadius: 8, overflow: "hidden" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid #333" }}>
+                      <th style={{ padding: "10px 14px", textAlign: "left", color: "#888", fontWeight: 500 }}>Criterion</th>
+                      <th style={{ padding: "10px 14px", textAlign: "center", color: "#4f8fff", fontWeight: 600, width: 80 }}>{results.labelA}</th>
+                      <th style={{ padding: "10px 14px", textAlign: "center", color: "#4fdf8f", fontWeight: 600, width: 80 }}>{results.labelB}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(aggregateResults.avgScores).map(([criterion, scores]) => (
+                      <tr key={criterion} style={{ borderBottom: "1px solid #222" }}>
+                        <td style={{ padding: "8px 14px", color: "#ccc" }}>{criterion}</td>
+                        <td style={{
+                          padding: "8px 14px", textAlign: "center", fontWeight: 600,
+                          color: Number(scores.A) >= Number(scores.B) ? "#4f8fff" : "#888",
+                        }}>
+                          {scores.A}
+                        </td>
+                        <td style={{
+                          padding: "8px 14px", textAlign: "center", fontWeight: 600,
+                          color: Number(scores.B) >= Number(scores.A) ? "#4fdf8f" : "#888",
+                        }}>
+                          {scores.B}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Per-prompt cards */}
+          <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 1, color: "#888", marginBottom: 8 }}>
+            Per-Prompt Results
+          </div>
+          {results.promptResults.map((r, i) => (
+            <div
+              key={i}
+              style={{ padding: 14, background: "#1a1a1a", borderRadius: 8, marginBottom: 8 }}
+            >
+              <div style={{ fontSize: 13, color: "#e0e0e0", marginBottom: 8, lineHeight: 1.5 }}>
+                {r.testPrompt}
+              </div>
+              {r.parseError ? (
+                <div>
+                  <p style={{ color: "#ff6b6b", fontSize: 12 }}>Judge response could not be parsed.</p>
+                  <pre style={{
+                    padding: 10, background: "#111", borderRadius: 6, fontSize: 11,
+                    color: "#999", whiteSpace: "pre-wrap", maxHeight: 200, overflow: "auto",
+                  }}>
+                    {r.rawJudge}
+                  </pre>
+                </div>
+              ) : (
+                <div>
+                  <div style={{ marginBottom: 6 }}>
+                    <span style={{
+                      fontSize: 12, fontWeight: 600,
+                      color: r.winner === "A" ? "#4f8fff" : r.winner === "B" ? "#4fdf8f" : "#888",
+                    }}>
+                      Winner: {r.winner === "A" ? results.labelA : r.winner === "B" ? results.labelB : "Unknown"}
+                    </span>
+                  </div>
+                  {r.rationale && (
+                    <p style={{ fontSize: 12, color: "#999", lineHeight: 1.5, margin: "0 0 8px 0" }}>
+                      {r.rationale}
+                    </p>
+                  )}
+                  {r.scores && (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                      {Object.entries(r.scores).map(([criterion, s]) => (
+                        <div
+                          key={criterion}
+                          style={{
+                            fontSize: 11, padding: "3px 8px", background: "#111",
+                            borderRadius: 4, color: "#888",
+                          }}
+                        >
+                          {criterion.substring(0, 20)}{criterion.length > 20 ? "..." : ""}:{" "}
+                          <span style={{ color: "#4f8fff" }}>{s.A}</span>
+                          {" / "}
+                          <span style={{ color: "#4fdf8f" }}>{s.B}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              {/* Expandable outputs */}
+              <button
+                onClick={() => toggleExpand(i)}
+                style={{
+                  marginTop: 8, padding: "4px 10px", borderRadius: 4,
+                  border: "1px solid #333", background: "transparent",
+                  color: "#666", cursor: "pointer", fontSize: 11,
+                }}
+              >
+                {expandedPrompts[i] ? "Hide outputs" : "Show full outputs"}
+              </button>
+              {expandedPrompts[i] && (
+                <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                  <div>
+                    <div style={{ fontSize: 11, color: "#4f8fff", marginBottom: 4, fontWeight: 600 }}>
+                      {results.labelA}
+                    </div>
+                    <pre style={{
+                      padding: 10, background: "#111", borderRadius: 6, fontSize: 11,
+                      color: "#ccc", whiteSpace: "pre-wrap", maxHeight: 300, overflow: "auto",
+                      lineHeight: 1.5,
+                    }}>
+                      {r.outputA}
+                    </pre>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, color: "#4fdf8f", marginBottom: 4, fontWeight: 600 }}>
+                      {results.labelB}
+                    </div>
+                    <pre style={{
+                      padding: 10, background: "#111", borderRadius: 6, fontSize: 11,
+                      color: "#ccc", whiteSpace: "pre-wrap", maxHeight: 300, overflow: "auto",
+                      lineHeight: 1.5,
+                    }}>
+                      {r.outputB}
+                    </pre>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+
+          {/* Timestamp */}
+          <div style={{ fontSize: 11, color: "#555", marginTop: 12, textAlign: "right" }}>
+            Ran {new Date(results.ts).toLocaleString()}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main App ────────────────────────────────────────────────
 
 export default function SkillEvolver() {
@@ -666,6 +1387,7 @@ export default function SkillEvolver() {
   const [updatedSkill, setUpdatedSkill] = useState(null);
   const [loading, setLoading] = useState(true);
   const [downloadStatus, setDownloadStatus] = useState(null);
+  const [evalPromptAfterResearch, setEvalPromptAfterResearch] = useState(false);
   const [apiKey, setApiKey] = useState(() => localStorage.getItem("skill-evolver:api-key") || "");
 
   useEffect(() => {
@@ -688,6 +1410,7 @@ export default function SkillEvolver() {
 
   const handleResearchComplete = ({ summary, updatedSkill: skill }) => {
     setUpdatedSkill(skill);
+    setEvalPromptAfterResearch(true);
   };
 
   const handleApprove = async (finalSkill) => {
@@ -724,6 +1447,7 @@ export default function SkillEvolver() {
   const tabs = [
     { id: "research", label: "Research & Update" },
     { id: "feedback", label: `Feedback${feedback.length > 0 ? ` (${feedback.length})` : ""}` },
+    { id: "eval", label: "Eval" },
     { id: "history", label: "History" },
   ];
 
@@ -853,7 +1577,44 @@ export default function SkillEvolver() {
         {tab === "research" && (
           <div>
             <ResearchPanel onResearchComplete={handleResearchComplete} feedback={feedback} apiKey={apiKey} />
-            {updatedSkill && (
+            {/* Post-research eval prompt */}
+            {evalPromptAfterResearch && updatedSkill && (
+              <div
+                style={{
+                  marginTop: 16, padding: "14px 18px", background: "#1a2e1a",
+                  borderRadius: 8, border: "1px solid #2a3e2a",
+                }}
+              >
+                <p style={{ color: "#4fdf8f", fontSize: 13, margin: "0 0 10px 0" }}>
+                  New skill version ready. Run eval to compare against current version?
+                </p>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button
+                    onClick={() => {
+                      setEvalPromptAfterResearch(false);
+                      setTab("eval");
+                    }}
+                    style={{
+                      padding: "8px 18px", borderRadius: 6, border: "none",
+                      background: "#4f8fff", color: "#fff", fontWeight: 600,
+                      cursor: "pointer", fontSize: 13,
+                    }}
+                  >
+                    Run Eval
+                  </button>
+                  <button
+                    onClick={() => setEvalPromptAfterResearch(false)}
+                    style={{
+                      padding: "8px 18px", borderRadius: 6, border: "1px solid #333",
+                      background: "transparent", color: "#888", cursor: "pointer", fontSize: 13,
+                    }}
+                  >
+                    Skip to Preview
+                  </button>
+                </div>
+              </div>
+            )}
+            {updatedSkill && !evalPromptAfterResearch && (
               <div style={{ marginTop: 24 }}>
                 <SkillPreview
                   skill={updatedSkill}
@@ -870,6 +1631,19 @@ export default function SkillEvolver() {
             feedback={feedback}
             onAdd={handleAddFeedback}
             onDelete={handleDeleteFeedback}
+          />
+        )}
+
+        {tab === "eval" && (
+          <EvalPanel
+            apiKey={apiKey}
+            skillId="frontend-design"
+            currentSkill={CURRENT_SKILL}
+            proposedSkill={updatedSkill || REVISED_SKILL}
+            onSkipToPreview={updatedSkill ? () => {
+              setTab("research");
+              setEvalPromptAfterResearch(false);
+            } : null}
           />
         )}
 
