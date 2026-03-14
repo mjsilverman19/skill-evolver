@@ -1085,46 +1085,35 @@ const DEFAULT_EVAL_CONFIG = {
 };
 
 // Extract renderable HTML from Claude output.
-// Claude often wraps HTML in markdown fences with a preamble explanation.
+// Claude wraps HTML in markdown fences with a preamble: "I'll create...\n```html\n<!DOCTYPE html>...\n```"
+// Key insight: just find <!DOCTYPE html> through the LAST </html> in the text. Greedy, simple.
 function extractHtml(text) {
   if (!text || typeof text !== "string") return { html: null, raw: text, isJsx: false };
 
-  // Check for React/JSX indicators (even inside fences)
   const isJsx = /\b(import\s+React|export\s+default\s+function|useState|useEffect|React\.createElement)\b/.test(text);
 
-  // Strategy 1: Find the LAST ```html ... ``` fence (greedy match gets the biggest block)
-  // Use a greedy approach: find all fenced blocks and take the one containing HTML
-  const allFences = [...text.matchAll(/```(?:html)?\s*\n([\s\S]*?)```/g)];
-  for (const fence of allFences) {
-    const inner = fence[1].trim();
-    if (/<!DOCTYPE\s+html|<html[\s>]/i.test(inner)) {
-      // Verify we got the closing </html> tag — if not, the fence was cut short
-      if (/<\/html>/i.test(inner)) {
-        return { html: inner, raw: text, isJsx: false };
-      }
+  // Find <!DOCTYPE html> ... </html> — use GREEDY [\s\S]* to get the LAST </html>
+  const hasDoctype = /<!DOCTYPE\s+html/i.test(text);
+  const hasClosingHtml = /<\/html>/i.test(text);
+  console.log("[extractHtml] length:", text.length, "hasDoctype:", hasDoctype, "hasClosingHtml:", hasClosingHtml);
+
+  if (hasDoctype && hasClosingHtml) {
+    const docMatch = text.match(/<!DOCTYPE\s+html[\s\S]*<\/html>/i);
+    if (docMatch) {
+      console.log("[extractHtml] matched doctype->html, extracted length:", docMatch[0].length);
+      return { html: docMatch[0].trim(), raw: text, isJsx: false };
     }
+    console.log("[extractHtml] WARN: hasDoctype + hasClosingHtml but regex failed!");
   }
 
-  // Strategy 2: Extract everything from <!DOCTYPE html> to </html>, ignoring fences
-  const fullDocMatch = text.match(/(<!DOCTYPE\s+html[\s\S]*?<\/html>)/i);
-  if (fullDocMatch) {
-    // Strip any leading ``` or trailing ``` that might have been captured
-    const cleaned = fullDocMatch[1].replace(/^```(?:html)?\s*\n?/, "").replace(/\n?```\s*$/, "").trim();
-    return { html: cleaned, raw: text, isJsx: false };
+  // Fallback: <html> ... </html> without DOCTYPE
+  const htmlMatch = text.match(/<html[\s\S]*<\/html>/i);
+  if (htmlMatch) {
+    console.log("[extractHtml] matched html tags, extracted length:", htmlMatch[0].length);
+    return { html: htmlMatch[0].trim(), raw: text, isJsx: false };
   }
 
-  // Strategy 3: <html> to </html> without DOCTYPE
-  const htmlTagMatch = text.match(/(<html[\s\S]*?<\/html>)/i);
-  if (htmlTagMatch) {
-    return { html: htmlTagMatch[1].trim(), raw: text, isJsx: false };
-  }
-
-  // Strategy 4: Direct HTML (starts with it, no fence)
-  const trimmed = text.trim();
-  if (/^<!DOCTYPE\s+html/i.test(trimmed) || /^<html[\s>]/i.test(trimmed)) {
-    return { html: trimmed, raw: text, isJsx: false };
-  }
-
+  console.log("[extractHtml] no HTML found. isJsx:", isJsx, "first 100 chars:", text.substring(0, 100));
   if (isJsx) return { html: null, raw: text, isJsx: true };
   return { html: null, raw: text, isJsx: false };
 }
