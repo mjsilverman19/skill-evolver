@@ -164,7 +164,7 @@ async function storageSet(key, value) {
   }
 }
 
-async function callClaude(messages, useSearch = false, apiKey = "", systemPrompt = "") {
+async function callClaude(messages, useSearch = false, apiKey = "", systemPrompt = "", maxRetries = 5) {
   if (!apiKey) throw new Error("API key is required. Enter your Anthropic API key above.");
 
   const body = {
@@ -179,44 +179,56 @@ async function callClaude(messages, useSearch = false, apiKey = "", systemPrompt
     body.tools = [{ type: "web_search_20250305", name: "web_search" }];
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 120000); // 2 min timeout
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 120000);
 
-  let response;
-  try {
-    response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true",
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-  } catch (err) {
-    clearTimeout(timeout);
-    if (err.name === "AbortError") {
-      throw new Error("Request timed out after 2 minutes. Try again.");
+    let response;
+    try {
+      response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "anthropic-dangerous-direct-browser-access": "true",
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      clearTimeout(timeout);
+      if (err.name === "AbortError") {
+        throw new Error("Request timed out after 2 minutes. Try again.");
+      }
+      throw new Error(`Network error: ${err.message}`);
     }
-    throw new Error(`Network error: ${err.message}`);
-  }
-  clearTimeout(timeout);
+    clearTimeout(timeout);
 
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new Error(`API returned ${response.status}: ${text.substring(0, 200)}`);
+    if (response.status === 429 && attempt < maxRetries) {
+      const retryAfter = response.headers.get("retry-after");
+      const delay = retryAfter ? parseInt(retryAfter, 10) * 1000 : Math.min(1000 * Math.pow(2, attempt), 30000);
+      console.log(`Rate limited (429). Retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})...`);
+      await new Promise((r) => setTimeout(r, delay));
+      continue;
+    }
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(`API returned ${response.status}: ${text.substring(0, 200)}`);
+    }
+
+    const data = await response.json();
+    if (data.error) throw new Error(data.error.message || "API error");
+
+    const textBlocks = data.content?.filter((b) => b.type === "text") || [];
+    if (textBlocks.length === 0) {
+      throw new Error("API returned no text content. This can happen when web search takes too long. Try again.");
+    }
+    return textBlocks.map((b) => b.text).join("\n");
   }
 
-  const data = await response.json();
-  if (data.error) throw new Error(data.error.message || "API error");
-
-  const textBlocks = data.content?.filter((b) => b.type === "text") || [];
-  if (textBlocks.length === 0) {
-    throw new Error("API returned no text content. This can happen when web search takes too long. Try again.");
-  }
-  return textBlocks.map((b) => b.text).join("\n");
+  throw new Error("Max retries exceeded due to rate limiting. Please wait a moment and try again.");
 }
 
 // ─── Components ──────────────────────────────────────────────
@@ -460,6 +472,10 @@ Respond with ONLY valid JSON, no markdown fences:
 
     try {
       for (let i = 0; i < queries.length; i++) {
+        if (i > 0) {
+          setProgress(`Waiting before next search... (${i + 1}/${queries.length})`);
+          await new Promise((r) => setTimeout(r, 3000));
+        }
         const q = queries[i];
         setProgress(`Searching ${q.label.toLowerCase()}... (${i + 1}/${queries.length})`);
         const result = await callClaude(
