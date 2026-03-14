@@ -107,11 +107,40 @@ Interpret creatively and make unexpected choices that feel genuinely designed fo
 
 Remember: Claude is capable of extraordinary creative work. Don't hold back, show what can truly be created when thinking outside the box and committing fully to a distinctive vision.`;
 
-const STORAGE_KEYS = {
-  FEEDBACK: "skill-evolver:frontend-design:feedback",
-  SKILL_HISTORY: "skill-evolver:frontend-design:history",
-  LATEST_SKILL: "skill-evolver:frontend-design:latest",
+const getStorageKeys = (skillId) => ({
+  FEEDBACK: `skill-evolver:${skillId}:feedback`,
+  SKILL_HISTORY: `skill-evolver:${skillId}:history`,
+  LATEST_SKILL: `skill-evolver:${skillId}:latest`,
+  CONFIG: `skill-evolver:${skillId}:config`,
+  EVAL_CONFIG: `skill-evolver:${skillId}:eval-config`,
+  EVAL_RESULTS: `skill-evolver:${skillId}:eval-results`,
+});
+
+const DEFAULT_CONFIG = {
+  id: "frontend-design",
+  currentContent: CURRENT_SKILL,
+  researchDomains: [
+    { label: "Typography & fonts", prompt: "Search the web for current web typography trends in 2025-2026. What fonts are designers actually using? What type pairings and scales are popular? What fonts are now considered overused or dated? Be specific with font names." },
+    { label: "CSS & layout", prompt: "Search the web for new CSS features that have reached broad browser support in 2025-2026. Include container queries, :has(), view transitions API, anchor positioning, scroll-driven animations, CSS nesting. Which are production-ready now?" },
+    { label: "Animation & motion", prompt: "Search the web for current frontend animation and motion design trends in 2025-2026. Is Framer Motion still the standard for React? What about GSAP, Motion One, or newer alternatives? What motion patterns are trending in web design?" },
+    { label: "Components & architecture", prompt: "Search the web for current React component patterns and popular UI component libraries in 2025-2026. Cover Server Components maturity, new shadcn/ui patterns, Radix, Ark UI, or any newer libraries gaining traction. Also cover current color and theming approaches." },
+    { label: "Design systems & anti-patterns", prompt: "Search the web for what leading design systems (Linear, Vercel, Stripe, Raycast) are doing in 2025-2026 that is new or notable. Also search for what web design patterns are now considered dated, generic, or 'AI-generated looking' and should be avoided." },
+  ],
+  evalPrompts: [
+    "Build a dashboard for tracking daily reading habits with a focus on streaks and genre breakdown",
+    "Create a landing page for a small-batch ceramics studio that sells online",
+    "Design a settings panel for a desktop music production app",
+  ],
+  evalCriteria: [
+    "Visual distinctiveness and memorability",
+    "Typography choices (avoids generic fonts, good pairing)",
+    "Code quality and production-readiness",
+    "Avoidance of generic AI aesthetic patterns",
+    "Layout creativity and spatial composition",
+  ],
 };
+
+const GLOBAL_CONFIG_KEY = "skill-evolver:active-config";
 
 // Simple ID generator
 let _idCounter = 0;
@@ -337,7 +366,7 @@ function FeedbackPanel({ feedback, onAdd, onDelete }) {
   );
 }
 
-function ResearchPanel({ onResearchComplete, feedback, apiKey }) {
+function ResearchPanel({ onResearchComplete, feedback, apiKey, currentSkill, researchDomains }) {
   const [status, setStatus] = useState("idle"); // idle | researching | synthesizing | done | error
   const [findings, setFindings] = useState(null);
   const [error, setError] = useState(null);
@@ -348,28 +377,10 @@ function ResearchPanel({ onResearchComplete, feedback, apiKey }) {
     setError(null);
     setFindings(null);
 
-    const searches = [
-      {
-        label: "Searching typography and font trends...",
-        prompt: "Search the web for current web typography trends in 2025-2026. What fonts are designers actually using? What type pairings and scales are popular? What fonts are now considered overused or dated? Be specific with font names.",
-      },
-      {
-        label: "Searching CSS and layout patterns...",
-        prompt: "Search the web for new CSS features that have reached broad browser support in 2025-2026. Include container queries, :has(), view transitions API, anchor positioning, scroll-driven animations, CSS nesting. Which are production-ready now?",
-      },
-      {
-        label: "Searching animation libraries and motion design...",
-        prompt: "Search the web for current frontend animation and motion design trends in 2025-2026. Is Framer Motion still the standard for React? What about GSAP, Motion One, or newer alternatives? What motion patterns are trending in web design?",
-      },
-      {
-        label: "Searching component architecture and UI libraries...",
-        prompt: "Search the web for current React component patterns and popular UI component libraries in 2025-2026. Cover Server Components maturity, new shadcn/ui patterns, Radix, Ark UI, or any newer libraries gaining traction. Also cover current color and theming approaches.",
-      },
-      {
-        label: "Searching design system trends and anti-patterns...",
-        prompt: "Search the web for what leading design systems (Linear, Vercel, Stripe, Raycast) are doing in 2025-2026 that is new or notable. Also search for what web design patterns are now considered dated, generic, or 'AI-generated looking' and should be avoided.",
-      },
-    ];
+    const searches = (researchDomains || DEFAULT_CONFIG.researchDomains).map((d) => ({
+      label: `Searching ${d.label.toLowerCase()}...`,
+      prompt: d.prompt,
+    }));
 
     const results = [];
 
@@ -394,11 +405,10 @@ function ResearchPanel({ onResearchComplete, feedback, apiKey }) {
           ? `\n\nThe user has also logged these specific issues with the current skill:\n${feedback.map((f) => `- [${f.category}] ${f.text}`).join("\n")}`
           : "";
 
-      const synthesisPrompt = `You are updating a Claude skill called "frontend-design" that guides Claude in creating production-grade frontend interfaces.
-
-Here is the CURRENT skill content:
+      const skillContent = currentSkill || CURRENT_SKILL;
+      const synthesisPrompt = `You are updating a Claude skill. Here is the CURRENT skill content:
 <current_skill>
-${CURRENT_SKILL}
+${skillContent}
 </current_skill>
 
 Here are research findings about current frontend trends:
@@ -455,7 +465,7 @@ Format your response exactly like this:
       setStatus("error");
       setProgress("");
     }
-  }, [feedback, onResearchComplete, apiKey]);
+  }, [feedback, onResearchComplete, apiKey, currentSkill, researchDomains]);
 
   return (
     <div>
@@ -1378,9 +1388,101 @@ Respond with ONLY valid JSON, no markdown fences, no preamble:
   );
 }
 
+// ─── Setup Screen ─────────────────────────────────────────────
+
+function SetupScreen({ onComplete }) {
+  const [skillName, setSkillName] = useState("");
+  const [skillContent, setSkillContent] = useState("");
+
+  const handleInit = async () => {
+    if (!skillName.trim() || !skillContent.trim()) return;
+    const id = skillName.trim().toLowerCase().replace(/[^a-z0-9-]/g, "-");
+    const config = {
+      ...DEFAULT_CONFIG,
+      id,
+      currentContent: skillContent.trim(),
+    };
+    const keys = getStorageKeys(id);
+    await storageSet(keys.CONFIG, config);
+    await storageSet(GLOBAL_CONFIG_KEY, config);
+    onComplete(config);
+  };
+
+  return (
+    <div
+      style={{
+        minHeight: "100vh",
+        background: "#111",
+        color: "#e0e0e0",
+        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+      }}
+    >
+      <div style={{ maxWidth: 600, margin: "0 auto", padding: "80px 20px" }}>
+        <div
+          style={{
+            fontSize: 11, textTransform: "uppercase", letterSpacing: 2,
+            color: "#4f8fff", marginBottom: 6,
+          }}
+        >
+          Skill Evolver
+        </div>
+        <h1 style={{ fontSize: 24, fontWeight: 700, margin: "0 0 8px 0", color: "#fff" }}>
+          Initialize Skill
+        </h1>
+        <p style={{ fontSize: 13, color: "#666", margin: "0 0 28px 0" }}>
+          Paste your SKILL.md content to get started.
+        </p>
+
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 12, color: "#888", marginBottom: 6 }}>Skill Name / ID</div>
+          <input
+            value={skillName}
+            onChange={(e) => setSkillName(e.target.value)}
+            placeholder="e.g. frontend-design"
+            style={{
+              width: "100%", padding: "10px 14px", borderRadius: 6, border: "1px solid #333",
+              background: "#1a1a1a", color: "#e0e0e0", fontSize: 14,
+            }}
+          />
+        </div>
+
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 12, color: "#888", marginBottom: 6 }}>SKILL.md Content</div>
+          <textarea
+            value={skillContent}
+            onChange={(e) => setSkillContent(e.target.value)}
+            placeholder="Paste the full content of your SKILL.md file here..."
+            rows={16}
+            style={{
+              width: "100%", padding: "12px 14px", borderRadius: 6, border: "1px solid #333",
+              background: "#1a1a1a", color: "#e0e0e0", fontSize: 13, fontFamily: "monospace",
+              lineHeight: 1.6, resize: "vertical",
+            }}
+          />
+        </div>
+
+        <button
+          onClick={handleInit}
+          disabled={!skillName.trim() || !skillContent.trim()}
+          style={{
+            padding: "12px 28px", borderRadius: 8, border: "none",
+            background: skillName.trim() && skillContent.trim() ? "#4f8fff" : "#333",
+            color: skillName.trim() && skillContent.trim() ? "#fff" : "#666",
+            fontWeight: 600, cursor: skillName.trim() && skillContent.trim() ? "pointer" : "default",
+            fontSize: 15,
+          }}
+        >
+          Initialize Skill Evolver
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main App ────────────────────────────────────────────────
 
 export default function SkillEvolver() {
+  const [skillConfig, setSkillConfig] = useState(null);
   const [tab, setTab] = useState("research");
   const [feedback, setFeedback] = useState([]);
   const [history, setHistory] = useState([]);
@@ -1390,19 +1492,36 @@ export default function SkillEvolver() {
   const [evalPromptAfterResearch, setEvalPromptAfterResearch] = useState(false);
   const [apiKey, setApiKey] = useState(() => localStorage.getItem("skill-evolver:api-key") || "");
 
+  const KEYS = useMemo(
+    () => (skillConfig ? getStorageKeys(skillConfig.id) : null),
+    [skillConfig]
+  );
+
+  // Load config on mount
   useEffect(() => {
     (async () => {
-      const savedFeedback = await storageGet(STORAGE_KEYS.FEEDBACK);
-      if (savedFeedback) setFeedback(savedFeedback);
-      const savedHistory = await storageGet(STORAGE_KEYS.SKILL_HISTORY);
-      if (savedHistory) setHistory(savedHistory);
+      const savedConfig = await storageGet(GLOBAL_CONFIG_KEY);
+      if (savedConfig) {
+        setSkillConfig(savedConfig);
+      }
       setLoading(false);
     })();
   }, []);
 
+  // Load feedback and history when config is available
+  useEffect(() => {
+    if (!KEYS) return;
+    (async () => {
+      const savedFeedback = await storageGet(KEYS.FEEDBACK);
+      if (savedFeedback) setFeedback(savedFeedback);
+      const savedHistory = await storageGet(KEYS.SKILL_HISTORY);
+      if (savedHistory) setHistory(savedHistory);
+    })();
+  }, [KEYS]);
+
   const saveFeedback = async (updated) => {
     setFeedback(updated);
-    await storageSet(STORAGE_KEYS.FEEDBACK, updated);
+    if (KEYS) await storageSet(KEYS.FEEDBACK, updated);
   };
 
   const handleAddFeedback = (entry) => saveFeedback([...feedback, entry]);
@@ -1414,7 +1533,7 @@ export default function SkillEvolver() {
   };
 
   const handleApprove = async (finalSkill) => {
-    // Save to history
+    if (!KEYS) return;
     const entry = {
       ts: new Date().toISOString(),
       summary: updatedSkill ? "Updated via research + feedback" : "Manual update",
@@ -1422,16 +1541,20 @@ export default function SkillEvolver() {
     };
     const newHistory = [entry, ...history];
     setHistory(newHistory);
-    await storageSet(STORAGE_KEYS.SKILL_HISTORY, newHistory);
+    await storageSet(KEYS.SKILL_HISTORY, newHistory);
+    await storageSet(KEYS.LATEST_SKILL, finalSkill);
 
-    // Save latest skill
-    await storageSet(STORAGE_KEYS.LATEST_SKILL, finalSkill);
+    // Update config with new current content
+    const updatedConfig = { ...skillConfig, currentContent: finalSkill };
+    setSkillConfig(updatedConfig);
+    await storageSet(KEYS.CONFIG, updatedConfig);
+    await storageSet(GLOBAL_CONFIG_KEY, updatedConfig);
 
     // Archive feedback
-    await storageSet(STORAGE_KEYS.FEEDBACK, []);
+    await storageSet(KEYS.FEEDBACK, []);
     setFeedback([]);
 
-    // Trigger download as .md
+    // Trigger download
     const blob = new Blob([finalSkill], { type: "text/markdown" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -1440,9 +1563,26 @@ export default function SkillEvolver() {
     a.click();
     URL.revokeObjectURL(url);
 
-    setDownloadStatus("Downloaded. Replace the SKILL.md in your frontend-design skill folder, then reinstall.");
+    setDownloadStatus(`Downloaded. Replace the SKILL.md in your ${skillConfig.id} skill folder, then reinstall.`);
     setTimeout(() => setDownloadStatus(null), 8000);
   };
+
+  const handleSetupComplete = (config) => {
+    setSkillConfig(config);
+    setFeedback([]);
+    setHistory([]);
+    setUpdatedSkill(null);
+  };
+
+  const handleSwitchSkill = () => {
+    setSkillConfig(null);
+    setFeedback([]);
+    setHistory([]);
+    setUpdatedSkill(null);
+    setTab("research");
+  };
+
+  const currentSkillContent = skillConfig?.currentContent || CURRENT_SKILL;
 
   const tabs = [
     { id: "research", label: "Research & Update" },
@@ -1458,13 +1598,18 @@ export default function SkillEvolver() {
           display: "flex",
           justifyContent: "center",
           alignItems: "center",
-          height: "100%",
+          height: "100vh",
           color: "#888",
+          background: "#111",
         }}
       >
         Loading...
       </div>
     );
+  }
+
+  if (!skillConfig) {
+    return <SetupScreen onComplete={handleSetupComplete} />;
   }
 
   return (
@@ -1481,17 +1626,29 @@ export default function SkillEvolver() {
         <div style={{ marginBottom: 32 }}>
           <div
             style={{
-              fontSize: 11,
-              textTransform: "uppercase",
-              letterSpacing: 2,
-              color: "#4f8fff",
-              marginBottom: 6,
+              display: "flex", justifyContent: "space-between", alignItems: "center",
             }}
           >
-            Skill Evolver
+            <div
+              style={{
+                fontSize: 11, textTransform: "uppercase", letterSpacing: 2,
+                color: "#4f8fff", marginBottom: 6,
+              }}
+            >
+              Skill Evolver
+            </div>
+            <button
+              onClick={handleSwitchSkill}
+              style={{
+                padding: "4px 10px", borderRadius: 4, border: "1px solid #333",
+                background: "transparent", color: "#666", cursor: "pointer", fontSize: 11,
+              }}
+            >
+              Switch Skill
+            </button>
           </div>
           <h1 style={{ fontSize: 24, fontWeight: 700, margin: "0 0 6px 0", color: "#fff" }}>
-            frontend-design
+            {skillConfig.id}
           </h1>
           <p style={{ fontSize: 13, color: "#666", margin: 0 }}>
             Research current trends, log issues, and generate updated skill files.
@@ -1576,7 +1733,13 @@ export default function SkillEvolver() {
         {/* Tab content */}
         {tab === "research" && (
           <div>
-            <ResearchPanel onResearchComplete={handleResearchComplete} feedback={feedback} apiKey={apiKey} />
+            <ResearchPanel
+              onResearchComplete={handleResearchComplete}
+              feedback={feedback}
+              apiKey={apiKey}
+              currentSkill={currentSkillContent}
+              researchDomains={skillConfig.researchDomains}
+            />
             {/* Post-research eval prompt */}
             {evalPromptAfterResearch && updatedSkill && (
               <div
@@ -1637,8 +1800,8 @@ export default function SkillEvolver() {
         {tab === "eval" && (
           <EvalPanel
             apiKey={apiKey}
-            skillId="frontend-design"
-            currentSkill={CURRENT_SKILL}
+            skillId={skillConfig.id}
+            currentSkill={currentSkillContent}
             proposedSkill={updatedSkill || REVISED_SKILL}
             onSkipToPreview={updatedSkill ? () => {
               setTab("research");
