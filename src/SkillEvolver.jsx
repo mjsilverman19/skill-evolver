@@ -699,7 +699,73 @@ function SkillPreview({ skill, onApprove, onEdit }) {
   );
 }
 
-function HistoryPanel({ history }) {
+function SimpleDiff({ textA, textB, labelA, labelB }) {
+  const linesA = textA.split("\n");
+  const linesB = textB.split("\n");
+
+  // Simple LCS-based diff
+  const lcs = [];
+  const m = linesA.length, n = linesB.length;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = linesA[i - 1] === linesB[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
+    }
+  }
+  // Backtrack
+  const diffLines = [];
+  let i = m, j = n;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && linesA[i - 1] === linesB[j - 1]) {
+      diffLines.unshift({ type: "same", text: linesA[i - 1] });
+      i--; j--;
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      diffLines.unshift({ type: "add", text: linesB[j - 1] });
+      j--;
+    } else {
+      diffLines.unshift({ type: "del", text: linesA[i - 1] });
+      i--;
+    }
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 16, marginBottom: 8, fontSize: 12 }}>
+        <span style={{ color: "#ff6b6b" }}>- {labelA || "Old"}</span>
+        <span style={{ color: "#4fdf8f" }}>+ {labelB || "New"}</span>
+      </div>
+      <div
+        style={{
+          padding: 12, background: "#111", borderRadius: 8, fontSize: 12,
+          fontFamily: "monospace", lineHeight: 1.6, maxHeight: 500, overflow: "auto",
+        }}
+      >
+        {diffLines.map((line, idx) => (
+          <div
+            key={idx}
+            style={{
+              padding: "1px 8px",
+              background: line.type === "add" ? "rgba(79,223,143,0.1)" :
+                          line.type === "del" ? "rgba(255,107,107,0.1)" : "transparent",
+              color: line.type === "add" ? "#4fdf8f" :
+                     line.type === "del" ? "#ff6b6b" : "#888",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-all",
+            }}
+          >
+            {line.type === "add" ? "+ " : line.type === "del" ? "- " : "  "}
+            {line.text}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function HistoryPanel({ history, currentSkill, onRestore }) {
+  const [expandedView, setExpandedView] = useState(null);
+  const [compareIdx, setCompareIdx] = useState(null);
+
   if (!history || history.length === 0) {
     return <p style={{ color: "#666", fontSize: 13 }}>No previous updates recorded.</p>;
   }
@@ -724,10 +790,62 @@ function HistoryPanel({ history }) {
               {new Date(entry.ts).toLocaleDateString()}
             </span>
           </div>
-          <p style={{ color: "#999", fontSize: 12, lineHeight: 1.5, margin: 0 }}>
+          <p style={{ color: "#999", fontSize: 12, lineHeight: 1.5, margin: "0 0 8px 0" }}>
             {entry.summary?.substring(0, 200)}
             {entry.summary?.length > 200 ? "..." : ""}
           </p>
+          {entry.skillContent && (
+            <div style={{ display: "flex", gap: 6 }}>
+              <button
+                onClick={() => setExpandedView(expandedView === i ? null : i)}
+                style={{
+                  padding: "4px 10px", borderRadius: 4, border: "1px solid #333",
+                  background: "transparent", color: "#888", cursor: "pointer", fontSize: 11,
+                }}
+              >
+                {expandedView === i ? "Hide" : "View"}
+              </button>
+              <button
+                onClick={() => onRestore(entry.skillContent)}
+                style={{
+                  padding: "4px 10px", borderRadius: 4, border: "1px solid #333",
+                  background: "transparent", color: "#4fdf8f", cursor: "pointer", fontSize: 11,
+                }}
+              >
+                Restore
+              </button>
+              <button
+                onClick={() => setCompareIdx(compareIdx === i ? null : i)}
+                style={{
+                  padding: "4px 10px", borderRadius: 4, border: "1px solid #333",
+                  background: "transparent", color: "#4f8fff", cursor: "pointer", fontSize: 11,
+                }}
+              >
+                {compareIdx === i ? "Hide Diff" : "Compare"}
+              </button>
+            </div>
+          )}
+          {expandedView === i && entry.skillContent && (
+            <div
+              style={{
+                marginTop: 10, padding: 12, background: "#111", borderRadius: 6,
+                fontSize: 12, fontFamily: "monospace", color: "#ccc", lineHeight: 1.6,
+                whiteSpace: "pre-wrap", maxHeight: 400, overflow: "auto",
+              }}
+            >
+              {entry.skillContent}
+            </div>
+          )}
+          {compareIdx === i && entry.skillContent && currentSkill && (
+            <div style={{ marginTop: 10 }}>
+              <SimpleDiff
+                textA={entry.skillContent}
+                textB={currentSkill}
+                labelA={`v${history.length - i}`}
+                labelB="Current"
+              />
+            </div>
+          )}
         </div>
       ))}
     </div>
@@ -1538,6 +1656,7 @@ export default function SkillEvolver() {
       ts: new Date().toISOString(),
       summary: updatedSkill ? "Updated via research + feedback" : "Manual update",
       feedbackCount: feedback.length,
+      skillContent: finalSkill,
     };
     const newHistory = [entry, ...history];
     setHistory(newHistory);
@@ -1810,7 +1929,22 @@ export default function SkillEvolver() {
           />
         )}
 
-        {tab === "history" && <HistoryPanel history={history} />}
+        {tab === "history" && (
+          <HistoryPanel
+            history={history}
+            currentSkill={currentSkillContent}
+            onRestore={async (content) => {
+              const updatedConfig = { ...skillConfig, currentContent: content };
+              setSkillConfig(updatedConfig);
+              if (KEYS) {
+                await storageSet(KEYS.CONFIG, updatedConfig);
+                await storageSet(GLOBAL_CONFIG_KEY, updatedConfig);
+              }
+              setDownloadStatus("Restored. The current skill has been updated to this version.");
+              setTimeout(() => setDownloadStatus(null), 5000);
+            }}
+          />
+        )}
       </div>
     </div>
   );
