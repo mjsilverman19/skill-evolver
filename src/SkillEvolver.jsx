@@ -366,29 +366,104 @@ function FeedbackPanel({ feedback, onAdd, onDelete }) {
   );
 }
 
-function ResearchPanel({ onResearchComplete, feedback, apiKey, currentSkill, researchDomains }) {
-  const [status, setStatus] = useState("idle"); // idle | researching | synthesizing | done | error
+function ResearchPanel({ onResearchComplete, feedback, apiKey, currentSkill, researchDomains, skillId }) {
+  // idle -> generating_queries -> reviewing_queries -> researching -> synthesizing -> done | error
+  const [status, setStatus] = useState("idle");
   const [findings, setFindings] = useState(null);
   const [error, setError] = useState(null);
   const [progress, setProgress] = useState("");
+  const [queries, setQueries] = useState(null); // editable queries for review
+
+  const generateQueries = useCallback(async () => {
+    setStatus("generating_queries");
+    setError(null);
+    setFindings(null);
+
+    try {
+      const skillContent = currentSkill || CURRENT_SKILL;
+
+      // Load previous research summary
+      const prevSummaryKey = `skill-evolver:${skillId}:last-research-summary`;
+      const previousResearchSummary = await storageGet(prevSummaryKey);
+
+      // Category counts from feedback
+      const categoryCounts = {};
+      feedback.forEach((f) => {
+        categoryCounts[f.category] = (categoryCounts[f.category] || 0) + 1;
+      });
+
+      const queryGenerationPrompt = `You are optimizing research queries for updating a Claude skill file.
+
+Current skill content:
+<skill>${skillContent}</skill>
+
+${feedback.length > 0 ? `User feedback log (${feedback.length} items):
+${feedback.map((f) => `- [${f.category}] ${f.text}`).join("\n")}
+
+Feedback category distribution:
+${Object.entries(categoryCounts).map(([cat, count]) => `  ${cat}: ${count}`).join("\n")}` : "No user feedback logged yet."}
+
+${previousResearchSummary ? `Previous research summary (avoid repeating these findings):
+${previousResearchSummary}` : ""}
+
+Generate exactly 5 web search research prompts. Each should:
+- Target a specific aspect of frontend development relevant to this skill
+- Be weighted toward areas with the most user feedback
+- Avoid re-covering ground from previous research summaries
+- Be specific enough to return actionable, current results
+
+Respond with ONLY valid JSON, no markdown fences:
+[
+  { "label": "Short label for UI", "prompt": "The full search prompt to send to Claude with web search" },
+  { "label": "...", "prompt": "..." },
+  { "label": "...", "prompt": "..." },
+  { "label": "...", "prompt": "..." },
+  { "label": "...", "prompt": "..." }
+]`;
+
+      const raw = await callClaude(
+        [{ role: "user", content: queryGenerationPrompt }],
+        false,
+        apiKey
+      );
+
+      let parsed;
+      try {
+        const cleaned = raw.replace(/```(?:json)?\s*/g, "").replace(/```\s*/g, "").trim();
+        parsed = JSON.parse(cleaned);
+      } catch {
+        // Fall back to default domains
+        parsed = (researchDomains || DEFAULT_CONFIG.researchDomains);
+      }
+
+      setQueries(parsed);
+      setStatus("reviewing_queries");
+    } catch (err) {
+      setError(err.message);
+      setStatus("error");
+    }
+  }, [feedback, apiKey, currentSkill, researchDomains, skillId]);
+
+  const useDefaultQueries = () => {
+    const defaults = (researchDomains || DEFAULT_CONFIG.researchDomains);
+    setQueries(defaults);
+    setStatus("reviewing_queries");
+  };
 
   const runResearch = useCallback(async () => {
+    if (!queries) return;
     setStatus("researching");
     setError(null);
     setFindings(null);
 
-    const searches = (researchDomains || DEFAULT_CONFIG.researchDomains).map((d) => ({
-      label: `Searching ${d.label.toLowerCase()}...`,
-      prompt: d.prompt,
-    }));
-
     const results = [];
 
     try {
-      for (const search of searches) {
-        setProgress(search.label);
+      for (let i = 0; i < queries.length; i++) {
+        const q = queries[i];
+        setProgress(`Searching ${q.label.toLowerCase()}... (${i + 1}/${queries.length})`);
         const result = await callClaude(
-          [{ role: "user", content: search.prompt }],
+          [{ role: "user", content: q.prompt }],
           true,
           apiKey
         );
@@ -445,8 +520,14 @@ Format your response exactly like this:
         throw new Error("Could not parse synthesis response. Try again.");
       }
 
+      const summary = summaryMatch[1].trim();
+
+      // Store research summary for next run
+      const prevSummaryKey = `skill-evolver:${skillId}:last-research-summary`;
+      await storageSet(prevSummaryKey, summary);
+
       setFindings({
-        summary: summaryMatch[1].trim(),
+        summary,
         updatedSkill: skillMatch[1].trim(),
         researchRaw: combinedResearch,
         timestamp: new Date().toISOString(),
@@ -456,7 +537,7 @@ Format your response exactly like this:
 
       if (onResearchComplete) {
         onResearchComplete({
-          summary: summaryMatch[1].trim(),
+          summary,
           updatedSkill: skillMatch[1].trim(),
         });
       }
@@ -465,33 +546,142 @@ Format your response exactly like this:
       setStatus("error");
       setProgress("");
     }
-  }, [feedback, onResearchComplete, apiKey, currentSkill, researchDomains]);
+  }, [queries, feedback, onResearchComplete, apiKey, currentSkill, skillId]);
 
   return (
     <div>
       {status === "idle" && (
         <div>
           <p style={{ color: "#999", fontSize: 14, marginBottom: 16, lineHeight: 1.6 }}>
-            This will search the web for current frontend development trends, design patterns,
-            and tooling updates, then synthesize those findings into an updated SKILL.md.
+            This will generate adaptive research queries based on your skill and feedback,
+            then search the web and synthesize findings into an updated SKILL.md.
             {feedback.length > 0 &&
-              ` Your ${feedback.length} logged feedback item${feedback.length > 1 ? "s" : ""} will also be incorporated.`}
+              ` Your ${feedback.length} logged feedback item${feedback.length > 1 ? "s" : ""} will be incorporated.`}
           </p>
-          <button
-            onClick={runResearch}
-            style={{
-              padding: "12px 28px",
-              borderRadius: 8,
-              border: "none",
-              background: "#4f8fff",
-              color: "#fff",
-              fontWeight: 600,
-              cursor: "pointer",
-              fontSize: 15,
-            }}
-          >
-            Research & Update Skill
-          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              onClick={generateQueries}
+              style={{
+                padding: "12px 28px",
+                borderRadius: 8,
+                border: "none",
+                background: "#4f8fff",
+                color: "#fff",
+                fontWeight: 600,
+                cursor: "pointer",
+                fontSize: 15,
+              }}
+            >
+              Generate Research Queries
+            </button>
+            <button
+              onClick={useDefaultQueries}
+              style={{
+                padding: "12px 28px",
+                borderRadius: 8,
+                border: "1px solid #333",
+                background: "transparent",
+                color: "#888",
+                cursor: "pointer",
+                fontSize: 15,
+              }}
+            >
+              Use Defaults
+            </button>
+          </div>
+        </div>
+      )}
+
+      {status === "generating_queries" && (
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
+            <div
+              style={{
+                width: 16, height: 16, border: "2px solid #4f8fff",
+                borderTopColor: "transparent", borderRadius: "50%",
+                animation: "spin 0.8s linear infinite",
+              }}
+            />
+            <span style={{ color: "#e0e0e0", fontSize: 14 }}>Generating adaptive queries...</span>
+          </div>
+          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        </div>
+      )}
+
+      {status === "reviewing_queries" && queries && (
+        <div>
+          <div style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: 1, color: "#888", marginBottom: 12 }}>
+            Review & Edit Research Queries
+          </div>
+          {queries.map((q, i) => (
+            <div key={i} style={{ marginBottom: 10, padding: 12, background: "#1a1a1a", borderRadius: 8 }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
+                <input
+                  value={q.label}
+                  onChange={(e) => {
+                    const updated = [...queries];
+                    updated[i] = { ...updated[i], label: e.target.value };
+                    setQueries(updated);
+                  }}
+                  style={{
+                    flex: 1, padding: "6px 10px", borderRadius: 4, border: "1px solid #333",
+                    background: "#111", color: "#e0e0e0", fontSize: 13, fontWeight: 600,
+                  }}
+                />
+                <button
+                  onClick={() => setQueries(queries.filter((_, j) => j !== i))}
+                  style={{
+                    background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 16,
+                  }}
+                >
+                  x
+                </button>
+              </div>
+              <textarea
+                value={q.prompt}
+                onChange={(e) => {
+                  const updated = [...queries];
+                  updated[i] = { ...updated[i], prompt: e.target.value };
+                  setQueries(updated);
+                }}
+                rows={2}
+                style={{
+                  width: "100%", padding: "6px 10px", borderRadius: 4, border: "1px solid #333",
+                  background: "#111", color: "#ccc", fontSize: 12, fontFamily: "inherit",
+                  resize: "vertical",
+                }}
+              />
+            </div>
+          ))}
+          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+            <button
+              onClick={runResearch}
+              style={{
+                padding: "12px 28px", borderRadius: 8, border: "none",
+                background: "#4f8fff", color: "#fff", fontWeight: 600, cursor: "pointer", fontSize: 15,
+              }}
+            >
+              Run Research
+            </button>
+            <button
+              onClick={() => setQueries([...queries, { label: "", prompt: "" }])}
+              style={{
+                padding: "12px 20px", borderRadius: 8, border: "1px solid #333",
+                background: "transparent", color: "#888", cursor: "pointer", fontSize: 13,
+              }}
+            >
+              + Add Query
+            </button>
+            <button
+              onClick={() => { setQueries(null); setStatus("idle"); }}
+              style={{
+                padding: "12px 20px", borderRadius: 8, border: "1px solid #333",
+                background: "transparent", color: "#666", cursor: "pointer", fontSize: 13,
+              }}
+            >
+              Back
+            </button>
+          </div>
         </div>
       )}
 
@@ -1858,6 +2048,7 @@ export default function SkillEvolver() {
               apiKey={apiKey}
               currentSkill={currentSkillContent}
               researchDomains={skillConfig.researchDomains}
+              skillId={skillConfig.id}
             />
             {/* Post-research eval prompt */}
             {evalPromptAfterResearch && updatedSkill && (
