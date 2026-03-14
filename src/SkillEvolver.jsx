@@ -480,6 +480,14 @@ Respond with ONLY valid JSON, no markdown fences:
           ? `\n\nThe user has also logged these specific issues with the current skill:\n${feedback.map((f) => `- [${f.category}] ${f.text}`).join("\n")}`
           : "";
 
+      // Load previous research summaries for deduplication
+      const summariesKey = `skill-evolver:${skillId}:research-summaries`;
+      const previousSummaries = (await storageGet(summariesKey)) || [];
+
+      const previousSummariesContext = previousSummaries.length > 0
+        ? `\n\nPrevious research summaries (focus on what is NEW or CHANGED since these were written):\n${previousSummaries.map((s) => `--- Summary from ${s.ts} ---\n${s.summary}`).join("\n\n")}`
+        : "";
+
       const skillContent = currentSkill || CURRENT_SKILL;
       const synthesisPrompt = `You are updating a Claude skill. Here is the CURRENT skill content:
 <current_skill>
@@ -490,7 +498,7 @@ Here are research findings about current frontend trends:
 <research>
 ${combinedResearch}
 </research>
-${feedbackContext}
+${feedbackContext}${previousSummariesContext}
 
 Based on the research and user feedback, produce:
 
@@ -522,7 +530,13 @@ Format your response exactly like this:
 
       const summary = summaryMatch[1].trim();
 
-      // Store research summary for next run
+      // Store research summary in rolling array (keep last 3)
+      const summariesKeyStore = `skill-evolver:${skillId}:research-summaries`;
+      const existingSummaries = (await storageGet(summariesKeyStore)) || [];
+      const updatedSummaries = [{ ts: new Date().toISOString(), summary }, ...existingSummaries].slice(0, 3);
+      await storageSet(summariesKeyStore, updatedSummaries);
+
+      // Also store as single key for adaptive query generation
       const prevSummaryKey = `skill-evolver:${skillId}:last-research-summary`;
       await storageSet(prevSummaryKey, summary);
 
