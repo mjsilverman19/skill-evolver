@@ -208,7 +208,7 @@ async function callClaude(messages, useSearch = false, apiKey = "", systemPrompt
     if (response.status === 429 && attempt < maxRetries) {
       const retryAfter = response.headers.get("retry-after");
       const delay = retryAfter ? parseInt(retryAfter, 10) * 1000 : Math.min(1000 * Math.pow(2, attempt), 30000);
-      console.log(`Rate limited (429). Retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})...`);
+      /* rate-limited — retry silently */
       await new Promise((r) => setTimeout(r, delay));
       continue;
     }
@@ -1095,25 +1095,19 @@ function extractHtml(text) {
   // Find <!DOCTYPE html> ... </html> — use GREEDY [\s\S]* to get the LAST </html>
   const hasDoctype = /<!DOCTYPE\s+html/i.test(text);
   const hasClosingHtml = /<\/html>/i.test(text);
-  console.log("[extractHtml] length:", text.length, "hasDoctype:", hasDoctype, "hasClosingHtml:", hasClosingHtml);
-
   if (hasDoctype && hasClosingHtml) {
     const docMatch = text.match(/<!DOCTYPE\s+html[\s\S]*<\/html>/i);
     if (docMatch) {
-      console.log("[extractHtml] matched doctype->html, extracted length:", docMatch[0].length);
       return { html: docMatch[0].trim(), raw: text, isJsx: false };
     }
-    console.log("[extractHtml] WARN: hasDoctype + hasClosingHtml but regex failed!");
   }
 
   // Fallback: <html> ... </html> without DOCTYPE
   const htmlMatch = text.match(/<html[\s\S]*<\/html>/i);
   if (htmlMatch) {
-    console.log("[extractHtml] matched html tags, extracted length:", htmlMatch[0].length);
     return { html: htmlMatch[0].trim(), raw: text, isJsx: false };
   }
 
-  console.log("[extractHtml] no HTML found. isJsx:", isJsx, "first 100 chars:", text.substring(0, 100));
   if (isJsx) return { html: null, raw: text, isJsx: true };
   return { html: null, raw: text, isJsx: false };
 }
