@@ -164,12 +164,12 @@ async function storageSet(key, value) {
   }
 }
 
-async function callClaude(messages, useSearch = false, apiKey = "", systemPrompt = "", maxRetries = 5) {
+async function callClaude(messages, useSearch = false, apiKey = "", systemPrompt = "", maxRetries = 5, { model = "claude-haiku-4-5-20251001", maxTokens = 16384 } = {}) {
   if (!apiKey) throw new Error("API key is required. Enter your Anthropic API key above.");
 
   const body = {
-    model: "claude-sonnet-4-20250514",
-    max_tokens: 4096,
+    model,
+    max_tokens: maxTokens,
     messages,
   };
   if (systemPrompt) {
@@ -378,6 +378,12 @@ function FeedbackPanel({ feedback, onAdd, onDelete }) {
   );
 }
 
+const DEPTH_OPTIONS = [
+  { label: "Quick", queries: 2, description: "2 queries, ~30s" },
+  { label: "Standard", queries: 3, description: "3 queries, ~1min" },
+  { label: "Deep", queries: 5, description: "5 queries, ~2min" },
+];
+
 function ResearchPanel({ onResearchComplete, feedback, apiKey, currentSkill, researchDomains, skillId }) {
   // idle -> generating_queries -> reviewing_queries -> researching -> synthesizing -> done | error
   const [status, setStatus] = useState("idle");
@@ -385,6 +391,7 @@ function ResearchPanel({ onResearchComplete, feedback, apiKey, currentSkill, res
   const [error, setError] = useState(null);
   const [progress, setProgress] = useState("");
   const [queries, setQueries] = useState(null); // editable queries for review
+  const [depth, setDepth] = useState(1); // index into DEPTH_OPTIONS (default: Standard)
 
   const generateQueries = useCallback(async () => {
     setStatus("generating_queries");
@@ -404,7 +411,11 @@ function ResearchPanel({ onResearchComplete, feedback, apiKey, currentSkill, res
         categoryCounts[f.category] = (categoryCounts[f.category] || 0) + 1;
       });
 
+      const currentDate = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+
       const queryGenerationPrompt = `You are optimizing research queries for updating a Claude skill file.
+
+Today's date is ${currentDate}. Ensure all queries target current (${new Date().getFullYear()}) trends and techniques — not prior years.
 
 Current skill content:
 <skill>${skillContent}</skill>
@@ -418,7 +429,7 @@ ${Object.entries(categoryCounts).map(([cat, count]) => `  ${cat}: ${count}`).joi
 ${previousResearchSummary ? `Previous research summary (avoid repeating these findings):
 ${previousResearchSummary}` : ""}
 
-Generate exactly 5 web search research prompts. Each should:
+Generate exactly ${DEPTH_OPTIONS[depth].queries} web search research prompts. Each should:
 - Target a specific aspect of frontend development relevant to this skill
 - Be weighted toward areas with the most user feedback
 - Avoid re-covering ground from previous research summaries
@@ -436,7 +447,10 @@ Respond with ONLY valid JSON, no markdown fences:
       const raw = await callClaude(
         [{ role: "user", content: queryGenerationPrompt }],
         false,
-        apiKey
+        apiKey,
+        "",
+        5,
+        { model: "claude-haiku-4-5-20251001", maxTokens: 2048 }
       );
 
       let parsed;
@@ -474,14 +488,17 @@ Respond with ONLY valid JSON, no markdown fences:
       for (let i = 0; i < queries.length; i++) {
         if (i > 0) {
           setProgress(`Waiting before next search... (${i + 1}/${queries.length})`);
-          await new Promise((r) => setTimeout(r, 3000));
+          await new Promise((r) => setTimeout(r, 1000));
         }
         const q = queries[i];
         setProgress(`Searching ${q.label.toLowerCase()}... (${i + 1}/${queries.length})`);
         const result = await callClaude(
           [{ role: "user", content: q.prompt }],
           true,
-          apiKey
+          apiKey,
+          "",
+          5,
+          { model: "claude-haiku-4-5-20251001", maxTokens: 4096 }
         );
         results.push(result);
       }
@@ -532,7 +549,10 @@ Format your response exactly like this:
       const synthesisResult = await callClaude(
         [{ role: "user", content: synthesisPrompt }],
         false,
-        apiKey
+        apiKey,
+        "",
+        5,
+        { model: "claude-sonnet-4-20250514", maxTokens: 8192 }
       );
 
       const summaryMatch = synthesisResult.match(
@@ -588,6 +608,29 @@ Format your response exactly like this:
             {feedback.length > 0 &&
               ` Your ${feedback.length} logged feedback item${feedback.length > 1 ? "s" : ""} will be incorporated.`}
           </p>
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 12, color: "#888", marginBottom: 8 }}>Research Depth</div>
+            <div style={{ display: "flex", gap: 4 }}>
+              {DEPTH_OPTIONS.map((opt, i) => (
+                <button
+                  key={opt.label}
+                  onClick={() => setDepth(i)}
+                  style={{
+                    padding: "8px 16px", borderRadius: 6, fontSize: 13, cursor: "pointer",
+                    border: depth === i ? "1px solid #4f8fff" : "1px solid #333",
+                    background: depth === i ? "#1a2a4a" : "transparent",
+                    color: depth === i ? "#4f8fff" : "#888",
+                    fontWeight: depth === i ? 600 : 400,
+                  }}
+                >
+                  {opt.label}
+                  <span style={{ display: "block", fontSize: 10, color: depth === i ? "#6aa0ff" : "#555", marginTop: 2 }}>
+                    {opt.description}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
           <div style={{ display: "flex", gap: 8 }}>
             <button
               onClick={generateQueries}
@@ -1092,13 +1135,16 @@ function extractHtml(text) {
 
   const isJsx = /\b(import\s+React|export\s+default\s+function|useState|useEffect|React\.createElement)\b/.test(text);
 
+  // Strip markdown code fences (```html ... ```) so regex can find the HTML
+  const stripped = text.replace(/```(?:html|HTML)?\s*\n?/g, "");
+
   // Find <!DOCTYPE html> ... </html> — use GREEDY [\s\S]* to get the LAST </html>
-  const hasDoctype = /<!DOCTYPE\s+html/i.test(text);
-  const hasClosingHtml = /<\/html>/i.test(text);
+  const hasDoctype = /<!DOCTYPE\s+html/i.test(stripped);
+  const hasClosingHtml = /<\/html>/i.test(stripped);
   console.log("[extractHtml] length:", text.length, "hasDoctype:", hasDoctype, "hasClosingHtml:", hasClosingHtml);
 
   if (hasDoctype && hasClosingHtml) {
-    const docMatch = text.match(/<!DOCTYPE\s+html[\s\S]*<\/html>/i);
+    const docMatch = stripped.match(/<!DOCTYPE\s+html[\s\S]*<\/html>/i);
     if (docMatch) {
       console.log("[extractHtml] matched doctype->html, extracted length:", docMatch[0].length);
       return { html: docMatch[0].trim(), raw: text, isJsx: false };
@@ -1107,7 +1153,7 @@ function extractHtml(text) {
   }
 
   // Fallback: <html> ... </html> without DOCTYPE
-  const htmlMatch = text.match(/<html[\s\S]*<\/html>/i);
+  const htmlMatch = stripped.match(/<html[\s\S]*<\/html>/i);
   if (htmlMatch) {
     console.log("[extractHtml] matched html tags, extracted length:", htmlMatch[0].length);
     return { html: htmlMatch[0].trim(), raw: text, isJsx: false };
@@ -1343,21 +1389,27 @@ function EvalPanel({ apiKey, skillId, currentSkill, proposedSkill, onSkipToPrevi
     setRevealed(false);
 
     try {
-      const outputA = await callClaude(
-        [{ role: "user", content: testPrompt }],
-        false,
-        apiKey,
-        config.skillA
-      );
+      setProgress("Generating outputs A & B in parallel...");
 
-      setProgress("Generating output from skill B...");
-
-      const outputB = await callClaude(
-        [{ role: "user", content: testPrompt }],
-        false,
-        apiKey,
-        config.skillB
-      );
+      const evalSuffix = "\n\nIMPORTANT: Output a single, complete, self-contained HTML file starting with <!DOCTYPE html> and ending with </html>. Include all CSS inline in a <style> tag and all JS inline in a <script> tag. Do NOT use React, JSX, artifacts, or external dependencies. Do NOT wrap the output in markdown code fences.";
+      const [outputA, outputB] = await Promise.all([
+        callClaude(
+          [{ role: "user", content: testPrompt + evalSuffix }],
+          false,
+          apiKey,
+          config.skillA,
+          5,
+          { model: "claude-haiku-4-5-20251001" }
+        ),
+        callClaude(
+          [{ role: "user", content: testPrompt + evalSuffix }],
+          false,
+          apiKey,
+          config.skillB,
+          5,
+          { model: "claude-haiku-4-5-20251001" }
+        ),
+      ]);
 
       const aIsX = Math.random() < 0.5;
 
@@ -1945,7 +1997,7 @@ function SetupScreen({ onComplete }) {
           Initialize Skill
         </h1>
         <p style={{ fontSize: 13, color: "#666", margin: "0 0 28px 0" }}>
-          Paste your SKILL.md content to get started.
+          Upload your SKILL.md file to get started.
         </p>
 
         <div style={{ marginBottom: 16 }}>
@@ -1962,18 +2014,35 @@ function SetupScreen({ onComplete }) {
         </div>
 
         <div style={{ marginBottom: 20 }}>
-          <div style={{ fontSize: 12, color: "#888", marginBottom: 6 }}>SKILL.md Content</div>
-          <textarea
-            value={skillContent}
-            onChange={(e) => setSkillContent(e.target.value)}
-            placeholder="Paste the full content of your SKILL.md file here..."
-            rows={16}
+          <div style={{ fontSize: 12, color: "#888", marginBottom: 6 }}>SKILL.md File</div>
+          <label
             style={{
-              width: "100%", padding: "12px 14px", borderRadius: 6, border: "1px solid #333",
-              background: "#1a1a1a", color: "#e0e0e0", fontSize: 13, fontFamily: "monospace",
-              lineHeight: 1.6, resize: "vertical",
+              display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+              padding: skillContent ? "14px" : "40px 14px",
+              borderRadius: 6, border: "1px dashed #333",
+              background: "#1a1a1a", color: skillContent ? "#4f8fff" : "#666",
+              fontSize: 14, cursor: "pointer", transition: "border-color 0.2s",
             }}
-          />
+            onDragOver={(e) => { e.preventDefault(); e.currentTarget.style.borderColor = "#4f8fff"; }}
+            onDragLeave={(e) => { e.currentTarget.style.borderColor = "#333"; }}
+            onDrop={(e) => {
+              e.preventDefault();
+              e.currentTarget.style.borderColor = "#333";
+              const file = e.dataTransfer.files[0];
+              if (file) file.text().then(setSkillContent);
+            }}
+          >
+            <input
+              type="file"
+              accept=".skill,.md,.txt"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const file = e.target.files[0];
+                if (file) file.text().then(setSkillContent);
+              }}
+            />
+            {skillContent ? `Loaded (${skillContent.split("\n").length} lines)` : "Click or drag SKILL.md file here"}
+          </label>
         </div>
 
         <button
